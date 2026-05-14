@@ -19,9 +19,18 @@ interface ModelListResponse {
   }>;
 }
 
+interface ApiContentPart {
+  type: "text" | "image_url";
+  text?: string;
+  image_url?: {
+    url: string;
+    detail?: string;
+  };
+}
+
 interface ApiMessage {
   role: ApiRole;
-  content: string | null;
+  content: string | null | ApiContentPart[];
   reasoning_content?: string;
   tool_call_id?: string;
   tool_calls?: OpenAiToolCall[];
@@ -77,24 +86,32 @@ interface ModelLimits extends BaseModelLimits {
 const UI_OUTPUT_TOKEN_RESERVE = 8192;
 
 const DEFAULT_MODEL_LIMITS: BaseModelLimits = {
-  contextWindow: 262144,
-  maxOutputTokens: 65536
+  contextWindow: 204800,
+  maxOutputTokens: 131072
 };
 
 const MODEL_LIMITS: Record<string, BaseModelLimits> = {
-  "glm-4.7": { contextWindow: 202752, maxOutputTokens: 65536 },
-  "glm-5": { contextWindow: 202752, maxOutputTokens: 32768 },
-  "glm-5.1": { contextWindow: 202752, maxOutputTokens: 32768 },
-  "glm-4.5-air": { contextWindow: 131072, maxOutputTokens: 65536 },
-  "glm-4.5-flash": { contextWindow: 131072, maxOutputTokens: 65536 }
+  "glm-4.7": { contextWindow: 204800, maxOutputTokens: 131072 },
+  "glm-5": { contextWindow: 204800, maxOutputTokens: 131072 },
+  "glm-5.1": { contextWindow: 204800, maxOutputTokens: 131072 },
+  "glm-4.5-air": { contextWindow: 131072, maxOutputTokens: 98304 },
+  "glm-4.5-flash": { contextWindow: 131072, maxOutputTokens: 98304 },
+  "glm-5v-turbo": { contextWindow: 204800, maxOutputTokens: 131072 },
+  "glm-4.6v": { contextWindow: 131072, maxOutputTokens: 32768 },
+  "glm-4.6v-flash": { contextWindow: 131072, maxOutputTokens: 32768 }
 };
+
+const VISION_MODELS = new Set(["glm-5v-turbo", "glm-4.6v", "glm-4.6v-flash"]);
 
 const BUNDLED_MODELS = [
   "glm-4.7",
   "glm-5",
   "glm-5.1",
   "glm-4.5-air",
-  "glm-4.5-flash"
+  "glm-4.5-flash",
+  "glm-5v-turbo",
+  "glm-4.6v",
+  "glm-4.6v-flash"
 ];
 
 type CopilotCompatibleCapabilities = vscode.LanguageModelChatCapabilities & {
@@ -300,7 +317,7 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
       return [];
     }
 
-    const models = await this.fetchModels();
+    const models = await this.fetchModels(apiKey);
     const settings = getSettings();
 
     return models.map((modelId) => {
@@ -321,7 +338,7 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
         isUserSelectable: true,
         maxInputTokens: limits.advertisedMaxInputTokens,
         maxOutputTokens: limits.advertisedMaxOutputTokens,
-        capabilities: modelCapabilities(),
+        capabilities: modelCapabilities(modelId),
         endpointKind: "chat-completions"
       };
     });
@@ -374,6 +391,10 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
       const message = error instanceof Error ? error.message : String(error);
       this.log(`ERROR model=${model.id}: ${message}`);
       this.getOutputChannel().show(true);
+
+      // Show a user-visible dialog with the actual API error
+      vscode.window.showErrorMessage(`Z.AI request failed: ${message}`);
+
       throw error;
     }
   }
@@ -387,20 +408,31 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
     return estimateTokenCount(value);
   }
 
-  private async fetchModels(): Promise<string[]> {
+  private async fetchModels(apiKey: string): Promise<string[]> {
     try {
-      const response = await fetch(MODELS_URL);
+      const response = await fetch(MODELS_URL, {
+        headers: {
+          "Authorization": `Bearer ${apiKey}`
+        }
+      });
 
       if (!response.ok) {
+        // 401/403: models endpoint may be restricted — silently use bundled list
+        if (response.status === 401 || response.status === 403) {
+          this.log(`Model list endpoint returned ${response.status}, using bundled fallback`);
+          return [...BUNDLED_MODELS];
+        }
         throw new Error(`Model list request failed (${response.status}): ${response.statusText}`);
       }
 
       const data = await response.json() as ModelListResponse;
-      const ids = data.data
+      const apiIds = data.data
         ?.map((model) => model.id)
         .filter((id): id is string => typeof id === "string" && id.length > 0);
 
-      return ids?.length ? ids : BUNDLED_MODELS;
+      // Merge API models with bundled models to ensure vision models always appear
+      const mergedIds = new Set([...(apiIds ?? []), ...BUNDLED_MODELS]);
+      return Array.from(mergedIds);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       vscode.window.showWarningMessage(`Could not fetch Z.AI model list. Using bundled model list. ${message}`);
@@ -502,6 +534,13 @@ async function streamZaiResponse(
 
     if (!response.ok) {
       const detail = await response.text();
+      const code = parseApiErrorCode(detail);
+      // 429 with subscription errors — give a helpful hint
+      if (response.status === 429 && code === "1311") {
+        throw new Error(
+          `Z.AI API request failed (429): ${detail}\n\nHint: This model may not be included in your current plan. Check your Z.AI subscription dashboard and verify the model is enabled.`
+        );
+      }
       throw new Error(`Z.AI API request failed (${response.status}): ${detail || response.statusText}`);
     }
 
@@ -570,12 +609,22 @@ function parseServerSentEvent(
   return parts;
 }
 
+function uint8ArrayToBase64(data: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 8192;
+  for (let i = 0; i < data.length; i += chunkSize) {
+    binary += String.fromCharCode(...data.subarray(i, Math.min(i + chunkSize, data.length)));
+  }
+  return btoa(binary);
+}
+
 function convertMessage(
   message: vscode.LanguageModelChatRequestMessage,
   reasoningContentByToolCallId: ReadonlyMap<string, string>
 ): ApiMessage[] {
   const role = message.role === vscode.LanguageModelChatMessageRole.Assistant ? "assistant" : "user";
   const textParts: string[] = [];
+  const imageParts: ApiContentPart[] = [];
   const toolCalls: OpenAiToolCall[] = [];
   const toolResults: ApiMessage[] = [];
 
@@ -601,10 +650,48 @@ function convertMessage(
       continue;
     }
 
+    // Handle image data parts from Copilot
+    if (part instanceof vscode.LanguageModelDataPart) {
+      const base64 = uint8ArrayToBase64(part.data);
+      const mime = part.mimeType || "image/png";
+      imageParts.push({
+        type: "image_url",
+        image_url: {
+          url: `data:${mime};base64,${base64}`,
+          detail: "auto"
+        }
+      });
+      continue;
+    }
+
     const text = partToText(part);
     if (text) {
       textParts.push(text);
     }
+  }
+
+  // If there are images, build content as an array (OpenAI vision format)
+  if (imageParts.length > 0) {
+    const content: ApiContentPart[] = [];
+    if (textParts.length > 0) {
+      content.push({ type: "text", text: textParts.join("\n") });
+    }
+    content.push(...imageParts);
+
+    if (role === "assistant" && toolCalls.length) {
+      return [{
+        role,
+        content: content || null,
+        reasoning_content: reasoningForToolCalls(toolCalls, reasoningContentByToolCallId),
+        tool_calls: toolCalls
+      }];
+    }
+
+    if (toolResults.length) {
+      return [{ role, content }, ...toolResults];
+    }
+
+    return [{ role, content }];
   }
 
   const content = textParts.join("\n");
@@ -669,7 +756,13 @@ function normalizeMessages(messages: ApiMessage[]): ApiMessage[] {
     }
 
     const previous = normalized.at(-1);
-    if (previous?.role === message.role && message.role !== "tool" && !previous.tool_calls && !message.tool_calls) {
+    const canMerge = previous?.role === message.role
+      && message.role !== "tool"
+      && !previous.tool_calls
+      && !message.tool_calls
+      && typeof previous.content === "string"
+      && typeof message.content === "string";
+    if (canMerge) {
       previous.content = `${previous.content ?? ""}\n\n${message.content ?? ""}`.trim();
     } else {
       normalized.push({ ...message });
@@ -687,11 +780,15 @@ function normalizeMessages(messages: ApiMessage[]): ApiMessage[] {
 }
 
 function hasMessagePayload(message: ApiMessage): boolean {
-  return Boolean(
-    (typeof message.content === "string" && message.content.trim())
-    || message.tool_calls?.length
-    || message.tool_call_id
-  );
+  if (message.tool_calls?.length || message.tool_call_id) {
+    return true;
+  }
+
+  if (Array.isArray(message.content)) {
+    return message.content.length > 0;
+  }
+
+  return typeof message.content === "string" && message.content.trim().length > 0;
 }
 
 class OpenAiResponseExtractor {
@@ -890,13 +987,28 @@ function positiveOverride(value: number): number | undefined {
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
 }
 
-function modelCapabilities(): CopilotCompatibleCapabilities {
+function modelCapabilities(modelId?: string): CopilotCompatibleCapabilities {
+  const isVision = modelId ? VISION_MODELS.has(modelId) : false;
+
   return {
-    imageInput: false,
+    imageInput: isVision,
     toolCalling: 128,
-    supportsImageToText: false,
+    supportsImageToText: isVision,
     supportsToolCalling: true
   };
+}
+
+function parseApiErrorCode(detail: string): string | undefined {
+  try {
+    const parsed = JSON.parse(detail) as Record<string, unknown>;
+    if (parsed?.error && typeof parsed.error === "object") {
+      const err = parsed.error as Record<string, unknown>;
+      return typeof err.code === "string" ? err.code : undefined;
+    }
+  } catch {
+    // Not JSON, ignore
+  }
+  return undefined;
 }
 
 function formatModelName(modelId: string): string {

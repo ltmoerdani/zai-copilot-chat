@@ -11,6 +11,7 @@ All notable changes to the **Z.AI Copilot Chat** extension are documented here.
 - Bundled fallback model metadata table (context window + max output tokens per model)
 - OpenAI-compatible chat completions endpoint with streaming support
 - Tool-calling support for Copilot Agent mode
+- **Vision/image support** — GLM-5V-Turbo, GLM-4.6V, and GLM-4.6V-Flash can receive images from Copilot Chat
 - `Z.AI: Manage Provider` command — manage API key, refresh models, test connection
 - `Z.AI: Set API Key` command — stores API key in VS Code Secret Storage
 - `Z.AI: Diagnostics` command — renders a markdown report of all registered models

@@ -14,13 +14,16 @@
 
 This lets you pick and use Z.AI GLM models directly from the Copilot Chat model picker, just like selecting GPT-4 or Claude — no extra Copilot Pro/Enterprise subscription required. Simply enter your Z.AI API key.
 
-| Model | Description |
-|---|---|
-| **GLM-4.7** | Latest flagship GLM model with 202K context window |
-| **GLM-5** | Next-generation GLM model |
-| **GLM-5.1** | Enhanced GLM-5 with improved reasoning |
-| **GLM-4.5-Air** | Lightweight GLM for faster responses |
-| **GLM-4.5-Flash** | Fastest GLM model for high-throughput use |
+| Model | Description | Vision |
+|---|---|---|---|
+| **GLM-4.7** | Latest flagship GLM model with 200K context | ❌ |
+| **GLM-5** | Next-generation GLM model | ❌ |
+| **GLM-5.1** | Enhanced GLM-5 with improved reasoning | ❌ |
+| **GLM-4.5-Air** | Lightweight GLM for faster responses | ❌ |
+| **GLM-4.5-Flash** | Fastest GLM model for high-throughput use | ❌ |
+| **GLM-5V-Turbo** | Multimodal vision + coding base model | ✅ |
+| **GLM-4.6V** | Visual reasoning model | ✅ |
+| **GLM-4.6V-Flash** | Free vision model with tool calling | ✅ |
 
 ---
 
@@ -104,13 +107,16 @@ VS Code and Copilot read separate input/output metadata fields for UI display. G
 
 ### Bundled model limits
 
-| Model | Context window | Max output tokens |
-|---|---:|---:|
-| `glm-4.7` | 202,752 | 65,536 |
-| `glm-5` | 202,752 | 32,768 |
-| `glm-5.1` | 202,752 | 32,768 |
-| `glm-4.5-air` | 131,072 | 65,536 |
-| `glm-4.5-flash` | 131,072 | 65,536 |
+| Model | Context window | Max output tokens | Vision |
+|---|---:|---:|:---:|
+| `glm-4.7` | 200K (204,800) | 128K (131,072) | ❌ |
+| `glm-5` | 200K (204,800) | 128K (131,072) | ❌ |
+| `glm-5.1` | 200K (204,800) | 128K (131,072) | ❌ |
+| `glm-4.5-air` | 128K (131,072) | 96K (98,304) | ❌ |
+| `glm-4.5-flash` | 128K (131,072) | 96K (98,304) | ❌ |
+| `glm-5v-turbo` | 200K (204,800) | 128K (131,072) | ✅ |
+| `glm-4.6v` | 128K (131,072) | 32K (32,768) | ✅ |
+| `glm-4.6v-flash` | 128K (131,072) | 32K (32,768) | ✅ |
 
 Set `zai.maxInputTokens` or `zai.maxTokens` to a non-zero value to override the bundled defaults globally.
 
