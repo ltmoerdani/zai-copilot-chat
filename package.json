@@ -1,0 +1,123 @@
+{
+  "name": "zai-copilot-chat",
+  "displayName": "Z.AI Copilot Chat",
+  "description": "Bring your own Z.AI API key to VS Code Copilot Chat. Adds Z.AI GLM models through the Language Model Chat Provider API.",
+  "version": "0.1.0",
+  "publisher": "ltmoerdani",
+  "license": "MIT",
+  "icon": "media/zai.png",
+  "galleryBanner": {
+    "color": "#1e1e2e",
+    "theme": "dark"
+  },
+  "keywords": [
+    "zai",
+    "zai-copilot-chat",
+    "copilot",
+    "byok",
+    "ai",
+    "language model",
+    "glm",
+    "llm",
+    "chat"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ltmoerdani/zai-copilot-chat.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ltmoerdani/zai-copilot-chat/issues"
+  },
+  "homepage": "https://github.com/ltmoerdani/zai-copilot-chat#readme",
+  "engines": {
+    "vscode": "^1.118.0"
+  },
+  "categories": [
+    "AI"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:zai.manage",
+    "onCommand:zai.diagnostics",
+    "onCommand:zai.setApiKey",
+    "onLanguageModelChatProvider:zai"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "zai.manage",
+        "title": "Z.AI: Manage Provider"
+      },
+      {
+        "command": "zai.setApiKey",
+        "title": "Z.AI: Set API Key"
+      },
+      {
+        "command": "zai.diagnostics",
+        "title": "Z.AI: Diagnostics"
+      }
+    ],
+    "configuration": {
+      "title": "Z.AI",
+      "properties": {
+        "zai.temperature": {
+          "type": "number",
+          "default": 0.2,
+          "minimum": 0,
+          "maximum": 2,
+          "description": "Sampling temperature used for chat completions."
+        },
+        "zai.maxTokens": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "Optional max output token override. Use 0 to request each Z.AI model's configured maximum."
+        },
+        "zai.maxInputTokens": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "Optional context size override advertised to VS Code. Use 0 to advertise each Z.AI model's configured context window."
+        },
+        "zai.debugReasoning": {
+          "type": "boolean",
+          "default": false,
+          "description": "Write provider reasoning_content to the Z.AI output channel for debugging. Reasoning is not shown in Copilot Chat."
+        }
+      }
+    },
+    "languageModelChatProviders": [
+      {
+        "vendor": "zai",
+        "displayName": "Z.AI",
+        "configuration": {
+          "type": "object",
+          "required": [
+            "apiKey"
+          ],
+          "properties": {
+            "apiKey": {
+              "type": "string",
+              "title": "Z.AI API Key",
+              "description": "Enter your Z.AI API key.",
+              "secret": true
+            }
+          }
+        }
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "@types/vscode": "^1.118.0",
+    "@vscode/vsce": "^3.6.0",
+    "typescript": "^5.9.3"
+  }
+}

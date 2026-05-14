@@ -1,0 +1,23 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background rounded rect - solid dark navy -->
+  <rect width="128" height="128" rx="22" fill="#0F172A"/>
+
+  <!-- Subtle inner glow ring -->
+  <rect x="2" y="2" width="124" height="124" rx="21" stroke="#1E40AF" stroke-width="2" fill="none" opacity="0.6"/>
+
+  <!-- Hexagon shape (outer accent) -->
+  <path d="M64 20 L99 40 L99 80 L64 100 L29 80 L29 40 Z"
+        stroke="#38BDF8" stroke-width="3.5" stroke-linejoin="round" fill="none" opacity="0.5"/>
+
+  <!-- Left bracket < -->
+  <path d="M50 48 L34 64 L50 80"
+        stroke="#38BDF8" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+
+  <!-- Right bracket > -->
+  <path d="M78 48 L94 64 L78 80"
+        stroke="#818CF8" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+
+  <!-- Slash / -->
+  <line x1="71" y1="44" x2="57" y2="84"
+        stroke="#E2E8F0" stroke-width="5.5" stroke-linecap="round"/>
+</svg>
