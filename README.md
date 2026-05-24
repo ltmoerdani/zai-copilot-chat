@@ -14,16 +14,20 @@
 
 This lets you pick and use Z.AI GLM models directly from the Copilot Chat model picker, just like selecting GPT-4 or Claude — no extra Copilot Pro/Enterprise subscription required. Simply enter your Z.AI API key.
 
-| Model | Description | Vision |
-|---|---|---|---|
-| **GLM-4.7** | Latest flagship GLM model with 200K context | ❌ |
-| **GLM-5** | Next-generation GLM model | ❌ |
-| **GLM-5.1** | Enhanced GLM-5 with improved reasoning | ❌ |
-| **GLM-4.5-Air** | Lightweight GLM for faster responses | ❌ |
-| **GLM-4.5-Flash** | Fastest GLM model for high-throughput use | ❌ |
-| **GLM-5V-Turbo** | Multimodal vision + coding base model | ✅ |
-| **GLM-4.6V** | Visual reasoning model | ✅ |
-| **GLM-4.6V-Flash** | Free vision model with tool calling | ✅ |
+| Model | Context | Max Output | Vision | Description |
+|---|---:|---:|:---:|---|
+| **GLM-5.1** | 200K | 128K | ❌ | Latest flagship, optimized for long-horizon tasks |
+| **GLM-5** | 200K | 128K | ❌ | Next-generation GLM, agentic planning |
+| **GLM-5-Turbo** | 200K | 128K | ❌ | Enhanced GLM-5 for complex long tasks |
+| **GLM-4.7** | 200K | 128K | ❌ | High-intelligence model, strong coding |
+| **GLM-4.6** | 200K | 128K | ❌ | High-performance, 200K context upgrade |
+| **GLM-4.5** | 128K | 96K | ❌ | Balanced performance and cost |
+| **GLM-4.5-Air** | 128K | 96K | ❌ | High cost-performance ratio |
+| **GLM-4.5-AirX** | 128K | 96K | ❌ | High-speed variant of GLM-4.5-Air |
+| **GLM-4.5-Flash** | 128K | 96K | ❌ | Free, fastest GLM text model |
+| **GLM-5V-Turbo** | 200K | 128K | ✅ | Multimodal vision + coding base model |
+| **GLM-4.6V** | 128K | 32K | ✅ | Visual reasoning with tool calling |
+| **GLM-4.6V-Flash** | 128K | 32K | ✅ | Free vision model with tool calling |
 
 ---
 

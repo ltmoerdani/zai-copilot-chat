@@ -81,34 +81,53 @@ interface ModelLimits extends BaseModelLimits {
   advertisedMaxOutputTokens: number;
 }
 
-// Copilot surfaces combine input/output metadata differently across views.
-// Reserve a modest UI output budget, while requests still use the real model max.
-const UI_OUTPUT_TOKEN_RESERVE = 8192;
+// Budget reserved for model output when advertising input capacity to VS Code.
+// VS Code uses (advertisedMaxInputTokens) to decide when to compact conversations.
+// A smaller reserve means VS Code compacts sooner, preventing context overflow.
+const OUTPUT_TOKEN_RESERVE = 16384;
 
 const DEFAULT_MODEL_LIMITS: BaseModelLimits = {
-  contextWindow: 204800,
-  maxOutputTokens: 131072
+  contextWindow: 128000,
+  maxOutputTokens: 128000
 };
 
+// Context window and max output tokens from official Z.AI docs:
+// https://docs.bigmodel.cn/cn/guide/start/model-overview
 const MODEL_LIMITS: Record<string, BaseModelLimits> = {
-  "glm-4.7": { contextWindow: 204800, maxOutputTokens: 131072 },
-  "glm-5": { contextWindow: 204800, maxOutputTokens: 131072 },
-  "glm-5.1": { contextWindow: 204800, maxOutputTokens: 131072 },
-  "glm-4.5-air": { contextWindow: 131072, maxOutputTokens: 98304 },
-  "glm-4.5-flash": { contextWindow: 131072, maxOutputTokens: 98304 },
-  "glm-5v-turbo": { contextWindow: 204800, maxOutputTokens: 131072 },
-  "glm-4.6v": { contextWindow: 131072, maxOutputTokens: 32768 },
-  "glm-4.6v-flash": { contextWindow: 131072, maxOutputTokens: 32768 }
+  // Text models — 200K context
+  "glm-5.1":        { contextWindow: 200000, maxOutputTokens: 128000 },
+  "glm-5":          { contextWindow: 200000, maxOutputTokens: 128000 },
+  "glm-5-turbo":    { contextWindow: 200000, maxOutputTokens: 128000 },
+  "glm-4.7":        { contextWindow: 200000, maxOutputTokens: 128000 },
+  "glm-4.7-flashx": { contextWindow: 200000, maxOutputTokens: 128000 },
+  "glm-4.7-flash":  { contextWindow: 200000, maxOutputTokens: 128000 },
+  "glm-4.6":        { contextWindow: 200000, maxOutputTokens: 128000 },
+  // Text models — 128K context
+  "glm-4.5":        { contextWindow: 128000, maxOutputTokens: 96000 },
+  "glm-4.5-air":    { contextWindow: 128000, maxOutputTokens: 96000 },
+  "glm-4.5-airx":   { contextWindow: 128000, maxOutputTokens: 96000 },
+  "glm-4.5-flash":  { contextWindow: 128000, maxOutputTokens: 96000 },
+  // Vision models
+  "glm-5v-turbo":   { contextWindow: 200000, maxOutputTokens: 128000 },
+  "glm-4.6v":       { contextWindow: 128000, maxOutputTokens: 32000 },
+  "glm-4.6v-flash": { contextWindow: 128000, maxOutputTokens: 32000 },
 };
 
 const VISION_MODELS = new Set(["glm-5v-turbo", "glm-4.6v", "glm-4.6v-flash"]);
 
 const BUNDLED_MODELS = [
-  "glm-4.7",
-  "glm-5",
+  // Text models — 200K
   "glm-5.1",
+  "glm-5",
+  "glm-5-turbo",
+  "glm-4.7",
+  "glm-4.6",
+  // Text models — 128K
+  "glm-4.5",
   "glm-4.5-air",
+  "glm-4.5-airx",
   "glm-4.5-flash",
+  // Vision models
   "glm-5v-turbo",
   "glm-4.6v",
   "glm-4.6v-flash"
@@ -469,11 +488,17 @@ async function streamChatCompletions(
     }
   });
 
+  // Estimate input token usage to budget max_tokens appropriately.
+  // This prevents sending a request where input + max_tokens > context window.
+  const estimatedInputTokens = estimateTotalTokens(messages);
+  const maxAvailableOutput = Math.max(1024, limits.contextWindow - estimatedInputTokens);
+  const requestMaxTokens = Math.min(limits.maxOutputTokens, maxAvailableOutput);
+
   const requestBody: Record<string, unknown> = {
     model: modelId,
     messages,
     temperature: settings.temperature,
-    max_tokens: limits.maxOutputTokens,
+    max_tokens: requestMaxTokens,
     stream: true,
     ...(tools.length ? { tools, tool_choice: toolChoice(options.toolMode) } : {})
   };
@@ -481,6 +506,12 @@ async function streamChatCompletions(
   // Z.AI GLM models need thinking disabled to return normal text content
   if (modelId.startsWith("glm-")) {
     requestBody.thinking = { type: "disabled" };
+  }
+
+  output.appendLine(`[${new Date().toISOString()}] Token budget: model=${modelId} input≈${estimatedInputTokens} maxOut=${requestMaxTokens} (contextWindow=${limits.contextWindow}, budgetUsed=${estimatedInputTokens + requestMaxTokens})`);
+
+  if (estimatedInputTokens >= limits.contextWindow) {
+    output.appendLine(`[${new Date().toISOString()}] WARNING: Input tokens (${estimatedInputTokens}) >= context window (${limits.contextWindow}). Request may fail.`);
   }
 
   await streamZaiResponse(
@@ -492,6 +523,31 @@ async function streamChatCompletions(
     (data) => extractor.extractStreamParts(data),
     extractChatCompletionParts
   );
+}
+
+function estimateTotalTokens(messages: ApiMessage[]): number {
+  let total = 0;
+  for (const msg of messages) {
+    if (typeof msg.content === "string") {
+      total += estimateTokenCount(msg.content);
+    } else if (Array.isArray(msg.content)) {
+      for (const part of msg.content) {
+        if (part.type === "text" && part.text) {
+          total += estimateTokenCount(part.text);
+        }
+      }
+    }
+    // Tool calls and reasoning content also consume tokens
+    if (msg.tool_calls) {
+      for (const tc of msg.tool_calls) {
+        total += estimateTokenCount(tc.function.name) + estimateTokenCount(tc.function.arguments);
+      }
+    }
+    if (msg.reasoning_content) {
+      total += estimateTokenCount(msg.reasoning_content);
+    }
+  }
+  return total;
 }
 
 function mapOpenAiTools(tools: readonly vscode.LanguageModelChatTool[] | undefined): OpenAiToolDefinition[] {
@@ -953,15 +1009,19 @@ function modelLimits(modelId: string, settings = getSettings()): ModelLimits {
   const limits = MODEL_LIMITS[modelId] ?? DEFAULT_MODEL_LIMITS;
   const contextWindow = positiveOverride(settings.maxInputTokensOverride) ?? limits.contextWindow;
   const maxOutputTokens = positiveOverride(settings.maxOutputTokensOverride) ?? limits.maxOutputTokens;
-  const apiMaxOutputTokens = Math.min(maxOutputTokens, contextWindow);
-  const advertisedContextWindow = contextWindow + apiMaxOutputTokens;
-  const advertisedMaxOutputTokens = Math.max(1, Math.min(apiMaxOutputTokens, UI_OUTPUT_TOKEN_RESERVE));
+
+  // The context window is the TOTAL token budget (input + output).
+  // Advertised max input = context window minus a reserve for output.
+  // This tells VS Code when to start compacting the conversation.
+  const outputReserve = Math.min(maxOutputTokens, OUTPUT_TOKEN_RESERVE);
+  const advertisedMaxInputTokens = Math.max(1, contextWindow - outputReserve);
+  const advertisedMaxOutputTokens = Math.max(1, outputReserve);
 
   return {
     contextWindow,
-    maxOutputTokens: apiMaxOutputTokens,
-    advertisedContextWindow,
-    advertisedMaxInputTokens: Math.max(1, advertisedContextWindow - advertisedMaxOutputTokens),
+    maxOutputTokens: Math.min(maxOutputTokens, contextWindow),
+    advertisedContextWindow: contextWindow,
+    advertisedMaxInputTokens,
     advertisedMaxOutputTokens
   };
 }
