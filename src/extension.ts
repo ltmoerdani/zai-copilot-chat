@@ -56,6 +56,8 @@ interface ApiSettings {
   maxOutputTokensOverride: number;
   maxInputTokensOverride: number;
   debugReasoning: boolean;
+  requestTimeout: number;
+  maxRetries: number;
 }
 
 interface LanguageModelConfiguration {
@@ -520,6 +522,8 @@ async function streamChatCompletions(
     requestBody,
     progress,
     token,
+    settings,
+    output,
     (data) => extractor.extractStreamParts(data),
     extractChatCompletionParts
   );
@@ -571,11 +575,61 @@ async function streamZaiResponse(
   body: unknown,
   progress: vscode.Progress<vscode.LanguageModelResponsePart>,
   token: vscode.CancellationToken,
+  settings: ApiSettings,
+  output: vscode.OutputChannel,
+  extractStreamParts: (data: unknown) => vscode.LanguageModelResponsePart[],
+  extractFullParts: (data: unknown) => vscode.LanguageModelResponsePart[]
+): Promise<void> {
+  let lastError: Error | undefined;
+
+  for (let attempt = 0; attempt <= settings.maxRetries; attempt++) {
+    if (token.isCancellationRequested) {
+      throw new DOMException("Request cancelled", "AbortError");
+    }
+
+    if (attempt > 0) {
+      const delay = Math.min(1000 * 2 ** (attempt - 1), 10000);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+
+    try {
+      await doStreamFetch(url, apiKey, body, progress, token, settings, extractStreamParts, extractFullParts);
+      return; // success
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+
+      // Don't retry on cancellation or non-retryable HTTP errors
+      if (lastError.name === "AbortError" || isNonRetryableHttpError(lastError)) {
+        throw lastError;
+      }
+
+      // Only retry on network-level errors or 5xx/429
+      if (!isRetryableError(lastError)) {
+        throw lastError;
+      }
+
+      output.appendLine(`Retry ${attempt + 1}/${settings.maxRetries} after error: ${lastError.message}`);
+    }
+  }
+
+  throw lastError ?? new Error("Z.AI request failed after retries");
+}
+
+async function doStreamFetch(
+  url: string,
+  apiKey: string,
+  body: unknown,
+  progress: vscode.Progress<vscode.LanguageModelResponsePart>,
+  token: vscode.CancellationToken,
+  settings: ApiSettings,
   extractStreamParts: (data: unknown) => vscode.LanguageModelResponsePart[],
   extractFullParts: (data: unknown) => vscode.LanguageModelResponsePart[]
 ): Promise<void> {
   const controller = new AbortController();
   const cancellation = token.onCancellationRequested(() => controller.abort());
+
+  // Apply request timeout: whichever fires first (user cancellation or timeout)
+  const timeoutId = setTimeout(() => controller.abort(new DOMException(`Request timed out after ${settings.requestTimeout}ms`, "TimeoutError")), settings.requestTimeout);
 
   try {
     const response = await fetch(url, {
@@ -634,8 +688,30 @@ async function streamZaiResponse(
       progress.report(part);
     }
   } finally {
+    clearTimeout(timeoutId);
     cancellation.dispose();
   }
+}
+
+function isRetryableError(error: Error): boolean {
+  // Network-level errors (fetch failed, DNS, connection refused, timeout)
+  if (error.message.includes("fetch failed") || error.name === "TypeError") {
+    return true;
+  }
+  // Timeout errors from our AbortSignal.timeout
+  if (error.name === "TimeoutError") {
+    return true;
+  }
+  // 5xx server errors and 429 rate limits
+  if (/\(5\d{2}\)/.test(error.message) || error.message.includes("429")) {
+    return true;
+  }
+  return false;
+}
+
+function isNonRetryableHttpError(error: Error): boolean {
+  // 4xx client errors (except 429) should not be retried
+  return /\(4[0-8]\d\)/.test(error.message) || /\(400\)/.test(error.message);
 }
 
 function parseServerSentEvent(
@@ -1001,7 +1077,9 @@ function getSettings(): ApiSettings {
     temperature: config.get("temperature", 0.2),
     maxOutputTokensOverride: config.get("maxTokens", 0),
     maxInputTokensOverride: config.get("maxInputTokens", 0),
-    debugReasoning: config.get("debugReasoning", false)
+    debugReasoning: config.get("debugReasoning", false),
+    requestTimeout: config.get("requestTimeout", 120000),
+    maxRetries: config.get("maxRetries", 2)
   };
 }
 

@@ -2,6 +2,19 @@
 
 All notable changes to the **Z.AI Copilot Chat** extension are documented here.
 
+## 0.1.2 — 2026-05-31
+
+### Changed
+- **Extension icon redesigned** — replaced generic `</>` code symbol with a bold **Z** lettermark using the Z.AI brand gradient (violet → indigo → cyan) on a dark purple background, with a glow halo and cyan accent dot referencing the "Z." brand mark
+- **Request timeout** — configurable timeout (default 120s) via `zai.requestTimeout` setting. Prevents requests from hanging indefinitely when the Z.AI API is slow or unresponsive.
+- **Automatic retry with exponential backoff** — transient errors (network failure, timeout, 5xx, 429) are automatically retried up to `zai.maxRetries` times (default 2) with backoff: 1s → 2s → capped 10s.
+- **Error classification** — `isRetryableError()` / `isNonRetryableHttpError()` helpers distinguish between transient and permanent errors. Client 4xx errors (except 429) are never retried. 5xx and 429 are retried.
+- **New settings** — `zai.requestTimeout` (10,000–300,000ms) and `zai.maxRetries` (0–5) added to VS Code configuration.
+
+### Fixed
+- **"fetch failed" with no recovery** — network-level errors (connection reset, DNS failure, server timeout) previously crashed the request immediately. Now they are retried with backoff before surfacing to the user.
+- **5-minute silent hangs** — `fetch()` previously had no timeout, so a hanging Z.AI API could block for up to ~5 minutes (VS Code's internal timeout). Now defaults to 120s with a clear `TimeoutError`.
+
 ## 0.1.1 — 2026-05-24
 
 ### Fixed

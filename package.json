@@ -2,7 +2,7 @@
   "name": "zai-copilot-chat",
   "displayName": "Z.AI Copilot Chat",
   "description": "Bring your own Z.AI API key to VS Code Copilot Chat. Adds Z.AI GLM models through the Language Model Chat Provider API.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "ltmoerdani",
   "license": "MIT",
   "icon": "media/zai.png",
@@ -84,6 +84,20 @@
           "type": "boolean",
           "default": false,
           "description": "Write provider reasoning_content to the Z.AI output channel for debugging. Reasoning is not shown in Copilot Chat."
+        },
+        "zai.requestTimeout": {
+          "type": "number",
+          "default": 120000,
+          "minimum": 10000,
+          "maximum": 300000,
+          "description": "Timeout in milliseconds for each API request. Default 120000 (2 minutes). Increase if you experience frequent timeouts with long contexts."
+        },
+        "zai.maxRetries": {
+          "type": "number",
+          "default": 2,
+          "minimum": 0,
+          "maximum": 5,
+          "description": "Number of automatic retries on transient network errors (fetch failed, timeout, 5xx). Default 2. Set to 0 to disable retries."
         }
       }
     },

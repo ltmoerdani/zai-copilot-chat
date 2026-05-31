@@ -1,23 +1,58 @@
 <svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <!-- Background rounded rect - solid dark navy -->
-  <rect width="128" height="128" rx="22" fill="#0F172A"/>
+  <defs>
+    <!-- Dark purple/navy background gradient -->
+    <linearGradient id="bg" x1="0" y1="0" x2="128" y2="128" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0D0B1A"/>
+      <stop offset="100%" stop-color="#190F35"/>
+    </linearGradient>
 
-  <!-- Subtle inner glow ring -->
-  <rect x="2" y="2" width="124" height="124" rx="21" stroke="#1E40AF" stroke-width="2" fill="none" opacity="0.6"/>
+    <!-- Z letter gradient: light purple → indigo → cyan (Z.AI brand) -->
+    <linearGradient id="zGrad" x1="24" y1="28" x2="104" y2="100" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#C4B5FD"/>
+      <stop offset="42%"  stop-color="#818CF8"/>
+      <stop offset="100%" stop-color="#22D3EE"/>
+    </linearGradient>
 
-  <!-- Hexagon shape (outer accent) -->
-  <path d="M64 20 L99 40 L99 80 L64 100 L29 80 L29 40 Z"
-        stroke="#38BDF8" stroke-width="3.5" stroke-linejoin="round" fill="none" opacity="0.5"/>
+    <!-- Radial inner glow behind Z -->
+    <radialGradient id="innerGlow" cx="64" cy="64" r="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#6366F1" stop-opacity="0.20"/>
+      <stop offset="100%" stop-color="#6366F1" stop-opacity="0"/>
+    </radialGradient>
 
-  <!-- Left bracket < -->
-  <path d="M50 48 L34 64 L50 80"
-        stroke="#38BDF8" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <!-- Blur filter for glow halo around Z -->
+    <filter id="zBlur" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
 
-  <!-- Right bracket > -->
-  <path d="M78 48 L94 64 L78 80"
-        stroke="#818CF8" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <!-- Background -->
+  <rect width="128" height="128" rx="22" fill="url(#bg)"/>
 
-  <!-- Slash / -->
-  <line x1="71" y1="44" x2="57" y2="84"
-        stroke="#E2E8F0" stroke-width="5.5" stroke-linecap="round"/>
+  <!-- Inner radial glow -->
+  <rect width="128" height="128" rx="22" fill="url(#innerGlow)"/>
+
+  <!-- Z glow halo (blurred + semi-transparent) -->
+  <polygon
+    points="24,28 104,28 104,46 48,82 104,82 104,100 24,100 24,82 80,46 24,46"
+    fill="url(#zGrad)"
+    opacity="0.35"
+    filter="url(#zBlur)"
+  />
+
+  <!-- Z crisp fill -->
+  <polygon
+    points="24,28 104,28 104,46 48,82 104,82 104,100 24,100 24,82 80,46 24,46"
+    fill="url(#zGrad)"
+  />
+
+  <!-- Small cyan dot — "Z." nod to Z.AI branding -->
+  <circle cx="111" cy="97" r="5" fill="#22D3EE" opacity="0.95"/>
+
+  <!-- Subtle border ring -->
+  <rect x="1.5" y="1.5" width="125" height="125" rx="21"
+        stroke="#6366F1" stroke-width="1.5" fill="none" opacity="0.35"/>
 </svg>
