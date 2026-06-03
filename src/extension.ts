@@ -1,10 +1,28 @@
 import * as vscode from "vscode";
+import {
+  clearContextWindowRequest,
+  disposeContextWindowHookBridge,
+  initializeContextWindowHookBridge,
+  reportProgressWithContextWindowRequest,
+  reportUsageToContextWindowForRequest,
+  setContextWindowOutputBufferForRequest,
+} from "./contextWindowHookBridge";
+import { createUsageDataParts, isInternalDataPart } from "./chatParts";
+import {
+  formatCacheHitRatio,
+  formatUsageLogLine,
+  formatUsageStatusBarText,
+  formatUsageStatusBarTooltip,
+  type UsageSnapshot,
+} from "./usage";
 
 const VENDOR = "zai";
 const SECRET_KEY = "zai.apiKey";
 const API_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
 const CHAT_COMPLETIONS_URL = `${API_BASE_URL}/chat/completions`;
 const MODELS_URL = `${API_BASE_URL}/models`;
+
+let usageStatusBarItem: vscode.StatusBarItem | undefined;
 
 type ApiRole = "user" | "assistant" | "tool";
 
@@ -150,18 +168,149 @@ interface OpenAiToolDefinition {
 }
 
 export function activate(context: vscode.ExtensionContext) {
+  ensureUsageStatusBar(context);
+  void syncExperimentalContextIndicator();
+
   const provider = new ZaiProvider(context);
 
   context.subscriptions.push(
     vscode.lm.registerLanguageModelChatProvider(VENDOR, provider),
     vscode.commands.registerCommand("zai.manage", () => provider.manage()),
     vscode.commands.registerCommand("zai.diagnostics", () => provider.showDiagnostics()),
-    vscode.commands.registerCommand("zai.setApiKey", () => provider.setApiKey())
+    vscode.commands.registerCommand("zai.setApiKey", () => provider.setApiKey()),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("zai.showUsageStatusBar")) {
+        resetUsageStatusBar();
+      }
+      if (event.affectsConfiguration("zai.experimentalContextIndicator")) {
+        void syncExperimentalContextIndicator();
+      }
+    }),
   );
 }
 
-export function deactivate() {
-  // Nothing to clean up.
+export async function deactivate(): Promise<void> {
+  await disposeContextWindowHookBridge();
+}
+
+function ensureUsageStatusBar(
+  context: vscode.ExtensionContext,
+): vscode.StatusBarItem {
+  if (!usageStatusBarItem) {
+    usageStatusBarItem = vscode.window.createStatusBarItem(
+      vscode.StatusBarAlignment.Right,
+      95,
+    );
+    context.subscriptions.push(usageStatusBarItem);
+  }
+
+  resetUsageStatusBar();
+  return usageStatusBarItem;
+}
+
+function shouldShowUsageStatusBar(): boolean {
+  return vscode.workspace
+    .getConfiguration("zai")
+    .get("showUsageStatusBar", true);
+}
+
+function isExperimentalContextIndicatorEnabled(): boolean {
+  return vscode.workspace
+    .getConfiguration("zai")
+    .get("experimentalContextIndicator", false);
+}
+
+function resetUsageStatusBar(): void {
+  if (!usageStatusBarItem) {
+    return;
+  }
+
+  if (!shouldShowUsageStatusBar()) {
+    usageStatusBarItem.hide();
+    return;
+  }
+
+  usageStatusBarItem.text = "Z.AI";
+  usageStatusBarItem.tooltip = "Z.AI usage summary";
+  usageStatusBarItem.show();
+}
+
+function updateUsageStatusBar(
+  providerDisplayName: string,
+  modelId: string,
+  summary: TransportRequestSummary,
+): void {
+  if (!usageStatusBarItem) {
+    return;
+  }
+
+  if (!shouldShowUsageStatusBar()) {
+    usageStatusBarItem.hide();
+    return;
+  }
+
+  const usage: UsageSnapshot = {
+    promptTokens: summary.promptTokens,
+    completionTokens: summary.completionTokens,
+    totalTokens: summary.totalTokens,
+    cachedTokens: summary.cachedTokens,
+    finishReason: summary.finishReason,
+  };
+  const text = formatUsageStatusBarText(providerDisplayName, usage);
+
+  usageStatusBarItem.text = text ?? providerDisplayName;
+  usageStatusBarItem.tooltip = formatUsageStatusBarTooltip(
+    providerDisplayName,
+    modelId,
+    usage,
+  );
+  usageStatusBarItem.show();
+}
+
+let hookDiagnosticChannel: vscode.OutputChannel | undefined;
+
+function getHookDiagnosticChannel(): vscode.OutputChannel {
+  if (!hookDiagnosticChannel) {
+    hookDiagnosticChannel = vscode.window.createOutputChannel("Z.AI");
+  }
+  return hookDiagnosticChannel;
+}
+
+function hookDiagnostic(message: string): void {
+  getHookDiagnosticChannel().appendLine(
+    `[${new Date().toISOString()}] [contextWindowHook] ${message}`,
+  );
+}
+
+async function syncExperimentalContextIndicator(): Promise<void> {
+  if (isExperimentalContextIndicatorEnabled()) {
+    const ok = await initializeContextWindowHookBridge(hookDiagnostic);
+    if (!ok) {
+      hookDiagnostic(
+        "experimentalContextIndicator is enabled but the bridge could not activate. " +
+        "The Copilot Chat footer will show default (estimated) usage. " +
+        "This is expected if VS Code internals changed — check for extension updates.",
+      );
+    }
+    return;
+  }
+
+  await disposeContextWindowHookBridge();
+}
+
+interface TransportRequestSummary {
+  modelId: string;
+  status?: number;
+  durationMs: number;
+  totalBytes: number;
+  totalEvents: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  cachedTokens?: number;
+  finishReason?: string;
+  abortedReason?: string;
+  errorMessage?: string;
 }
 
 class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
@@ -383,6 +532,7 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
     const apiMessages = normalizeMessages(messages.flatMap((message) => convertMessage(message, this.reasoningContentByToolCallId)));
     const settings = getSettings();
     const limits = modelLimits(model.id, settings);
+    const localRequestId = crypto.randomUUID();
 
     this.log(`Request: model=${model.id} messages=${apiMessages.length}`);
     if (settings.debugReasoning) {
@@ -390,6 +540,13 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
     }
 
     try {
+      const outputChannel = this.getOutputChannel();
+
+      // Estimate the output buffer for context window tracking
+      const estimatedInputTokens = estimateTotalTokens(apiMessages);
+      const maxAvailableOutput = Math.max(1024, limits.contextWindow - estimatedInputTokens);
+      const contextWindowOutputBuffer = Math.min(limits.maxOutputTokens, maxAvailableOutput);
+
       await streamChatCompletions(
         CHAT_COMPLETIONS_URL,
         apiKey,
@@ -400,21 +557,40 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
         limits,
         progress,
         token,
-        this.getOutputChannel(),
+        outputChannel,
         (toolCallIds, reasoningContent) => {
           for (const toolCallId of toolCallIds) {
             this.reasoningContentByToolCallId.set(toolCallId, reasoningContent);
           }
-        }
+        },
+        localRequestId,
+        contextWindowOutputBuffer,
+        (summary) => {
+          updateUsageStatusBar("Z.AI", model.id, summary);
+          const usageLog = formatUsageLogLine({
+            promptTokens: summary.promptTokens,
+            completionTokens: summary.completionTokens,
+            totalTokens: summary.totalTokens,
+            cachedTokens: summary.cachedTokens,
+            finishReason: summary.finishReason,
+          });
+          if (usageLog) {
+            outputChannel.appendLine(`[usage] ${usageLog}`);
+          }
+        },
       );
       this.log(`Request completed: model=${model.id}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const isTimeout = message.includes("timed out") || message.includes("Timeout") || message.includes("inactive");
+      const friendlyMsg = isTimeout
+        ? `Request timed out for ${model.id}. Try: (1) use a smaller context, (2) increase zai.requestTimeout, or (3) retry in a moment. Detail: ${message}`
+        : `Z.AI request failed: ${message}`;
       this.log(`ERROR model=${model.id}: ${message}`);
       this.getOutputChannel().show(true);
 
       // Show a user-visible dialog with the actual API error
-      vscode.window.showErrorMessage(`Z.AI request failed: ${message}`);
+      vscode.window.showErrorMessage(friendlyMsg);
 
       throw error;
     }
@@ -468,6 +644,14 @@ function getConfiguredApiKey(options?: { configuration?: LanguageModelConfigurat
   return typeof configuredApiKey === "string" && configuredApiKey.trim() ? configuredApiKey.trim() : undefined;
 }
 
+interface RequestUsageSummary {
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  cachedTokens?: number;
+  finishReason?: string;
+}
+
 async function streamChatCompletions(
   url: string,
   apiKey: string,
@@ -479,7 +663,10 @@ async function streamChatCompletions(
   progress: vscode.Progress<vscode.LanguageModelResponsePart>,
   token: vscode.CancellationToken,
   output: vscode.OutputChannel,
-  onReasoningContent?: (toolCallIds: string[], reasoningContent: string) => void
+  onReasoningContent?: (toolCallIds: string[], reasoningContent: string) => void,
+  localRequestId?: string,
+  contextWindowOutputBuffer?: number,
+  onTransportSummary?: (summary: TransportRequestSummary) => void,
 ): Promise<void> {
   const tools = mapOpenAiTools(options.tools);
   const extractor = new OpenAiResponseExtractor(onReasoningContent, (reasoningContent) => {
@@ -516,6 +703,9 @@ async function streamChatCompletions(
     output.appendLine(`[${new Date().toISOString()}] WARNING: Input tokens (${estimatedInputTokens}) >= context window (${limits.contextWindow}). Request may fail.`);
   }
 
+  const startedAt = Date.now();
+  const usageSummary: RequestUsageSummary = {};
+
   await streamZaiResponse(
     url,
     apiKey,
@@ -525,8 +715,83 @@ async function streamChatCompletions(
     settings,
     output,
     (data) => extractor.extractStreamParts(data),
-    extractChatCompletionParts
+    extractChatCompletionParts,
+    (data) => updateRequestUsageSummary(usageSummary, data),
+    localRequestId,
+    contextWindowOutputBuffer,
   );
+
+  const durationMs = Date.now() - startedAt;
+  const summary: TransportRequestSummary = {
+    modelId,
+    durationMs,
+    totalBytes: 0, // Not tracked in current implementation
+    totalEvents: 0,
+    ...(usageSummary.promptTokens === undefined
+      ? {}
+      : { promptTokens: usageSummary.promptTokens }),
+    ...(usageSummary.completionTokens === undefined
+      ? {}
+      : { completionTokens: usageSummary.completionTokens }),
+    ...(usageSummary.totalTokens === undefined
+      ? {}
+      : { totalTokens: usageSummary.totalTokens }),
+    ...(usageSummary.cachedTokens === undefined
+      ? {}
+      : { cachedTokens: usageSummary.cachedTokens }),
+    ...(usageSummary.finishReason === undefined
+      ? {}
+      : { finishReason: usageSummary.finishReason }),
+  };
+
+  output.appendLine(
+    `[response-summary] model=${modelId} durationMs=${durationMs} promptTokens=${usageSummary.promptTokens ?? "n/a"} completionTokens=${usageSummary.completionTokens ?? "n/a"} totalTokens=${usageSummary.totalTokens ?? "n/a"} cachedTokens=${usageSummary.cachedTokens ?? "n/a"} finishReason=${usageSummary.finishReason ?? "<unknown>"}`,
+  );
+
+  const usageLog = formatUsageLogLine({
+    promptTokens: usageSummary.promptTokens,
+    completionTokens: usageSummary.completionTokens,
+    totalTokens: usageSummary.totalTokens,
+    cachedTokens: usageSummary.cachedTokens,
+    finishReason: usageSummary.finishReason,
+  });
+  if (usageLog) {
+    output.appendLine(`[usage] ${usageLog}`);
+  }
+
+  onTransportSummary?.(summary);
+
+  if (localRequestId) {
+    reportUsageToContextWindowForRequest(localRequestId, {
+      promptTokens: usageSummary.promptTokens,
+      completionTokens: usageSummary.completionTokens,
+      totalTokens: usageSummary.totalTokens,
+      cachedTokens: usageSummary.cachedTokens,
+      finishReason: usageSummary.finishReason,
+    });
+  }
+
+  const usageParts =
+    summary.errorMessage || summary.abortedReason
+      ? []
+      : createUsageDataParts({
+          promptTokens: usageSummary.promptTokens,
+          completionTokens: usageSummary.completionTokens,
+          totalTokens: usageSummary.totalTokens,
+          cachedTokens: usageSummary.cachedTokens,
+          finishReason: usageSummary.finishReason,
+        });
+  for (const usagePart of usageParts) {
+    if (localRequestId) {
+      reportProgressWithContextWindowRequest(localRequestId, progress, usagePart);
+    } else {
+      progress.report(usagePart);
+    }
+  }
+
+  if (localRequestId) {
+    clearContextWindowRequest(localRequestId);
+  }
 }
 
 function estimateTotalTokens(messages: ApiMessage[]): number {
@@ -578,22 +843,30 @@ async function streamZaiResponse(
   settings: ApiSettings,
   output: vscode.OutputChannel,
   extractStreamParts: (data: unknown) => vscode.LanguageModelResponsePart[],
-  extractFullParts: (data: unknown) => vscode.LanguageModelResponsePart[]
+  extractFullParts: (data: unknown) => vscode.LanguageModelResponsePart[],
+  onUsageData?: (data: unknown) => void,
+  localRequestId?: string,
+  contextWindowOutputBuffer?: number,
 ): Promise<void> {
   let lastError: Error | undefined;
+  const maxAttempts = 1 + settings.maxRetries; // 1 initial + N retries
 
-  for (let attempt = 0; attempt <= settings.maxRetries; attempt++) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     if (token.isCancellationRequested) {
       throw new DOMException("Request cancelled", "AbortError");
     }
 
     if (attempt > 0) {
-      const delay = Math.min(1000 * 2 ** (attempt - 1), 10000);
+      // Exponential backoff with jitter to avoid thundering herd
+      const baseDelay = Math.min(1000 * 2 ** (attempt - 1), 10000);
+      const jitter = Math.random() * 500;
+      const delay = baseDelay + jitter;
+      output.appendLine(`Retry ${attempt}/${settings.maxRetries} in ${Math.round(delay)}ms after error: ${lastError?.message}`);
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
 
     try {
-      await doStreamFetch(url, apiKey, body, progress, token, settings, extractStreamParts, extractFullParts);
+      await doStreamFetch(url, apiKey, body, progress, token, settings, extractStreamParts, extractFullParts, output, onUsageData, localRequestId, contextWindowOutputBuffer);
       return; // success
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
@@ -607,12 +880,10 @@ async function streamZaiResponse(
       if (!isRetryableError(lastError)) {
         throw lastError;
       }
-
-      output.appendLine(`Retry ${attempt + 1}/${settings.maxRetries} after error: ${lastError.message}`);
     }
   }
 
-  throw lastError ?? new Error("Z.AI request failed after retries");
+  throw lastError ?? new Error(`Z.AI request failed after ${settings.maxRetries} retries`);
 }
 
 async function doStreamFetch(
@@ -623,13 +894,40 @@ async function doStreamFetch(
   token: vscode.CancellationToken,
   settings: ApiSettings,
   extractStreamParts: (data: unknown) => vscode.LanguageModelResponsePart[],
-  extractFullParts: (data: unknown) => vscode.LanguageModelResponsePart[]
+  extractFullParts: (data: unknown) => vscode.LanguageModelResponsePart[],
+  output: vscode.OutputChannel,
+  onUsageData?: (data: unknown) => void,
+  localRequestId?: string,
+  contextWindowOutputBuffer?: number,
 ): Promise<void> {
   const controller = new AbortController();
   const cancellation = token.onCancellationRequested(() => controller.abort());
 
-  // Apply request timeout: whichever fires first (user cancellation or timeout)
-  const timeoutId = setTimeout(() => controller.abort(new DOMException(`Request timed out after ${settings.requestTimeout}ms`, "TimeoutError")), settings.requestTimeout);
+  // Connection timeout: abort if the initial connection / headers take too long.
+  // This is separate from the inactivity timeout below.
+  const connectionTimeoutId = setTimeout(
+    () => controller.abort(new DOMException(`Connection timed out after ${settings.requestTimeout}ms`, "TimeoutError")),
+    settings.requestTimeout
+  );
+
+  // Track the last time we received data, for inactivity detection.
+  let lastActivity = Date.now();
+  // Inactivity timeout: if no data arrives for this long during streaming, abort.
+  // Defaults to 60s (half the connection timeout, min 30s, max 120s).
+  const inactivityMs = Math.max(30000, Math.min(120000, settings.requestTimeout / 2));
+  let inactivityTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const resetInactivity = () => {
+    lastActivity = Date.now();
+    if (inactivityTimer) {
+      clearTimeout(inactivityTimer);
+    }
+    inactivityTimer = setTimeout(() => {
+      const inactiveFor = Date.now() - lastActivity;
+      output.appendLine(`Inactivity timeout: no data for ${inactiveFor}ms (threshold: ${inactivityMs}ms)`);
+      controller.abort(new DOMException(`Stream inactive for ${Math.round(inactiveFor / 1000)}s — Z.AI server stopped sending data`, "TimeoutError"));
+    }, inactivityMs);
+  };
 
   try {
     const response = await fetch(url, {
@@ -642,7 +940,13 @@ async function doStreamFetch(
       signal: controller.signal
     });
 
+    // Connection succeeded — clear connection timeout, start inactivity timer
+    clearTimeout(connectionTimeoutId);
+    resetInactivity();
+
     if (!response.ok) {
+      // Clear inactivity timer on error path
+      if (inactivityTimer) { clearTimeout(inactivityTimer); }
       const detail = await response.text();
       const code = parseApiErrorCode(detail);
       // 429 with subscription errors — give a helpful hint
@@ -656,9 +960,15 @@ async function doStreamFetch(
 
     const contentType = response.headers.get("content-type") ?? "";
     if (!response.body || !contentType.includes("text/event-stream")) {
+      if (inactivityTimer) { clearTimeout(inactivityTimer); }
       const data = await response.json();
+      onUsageData?.(data);
       for (const part of extractFullParts(data)) {
-        progress.report(part);
+        if (localRequestId) {
+          reportProgressWithContextWindowRequest(localRequestId, progress, part);
+        } else {
+          progress.report(part);
+        }
       }
       return;
     }
@@ -673,22 +983,36 @@ async function doStreamFetch(
         break;
       }
 
+      // Data received — reset inactivity timer
+      resetInactivity();
+
       buffer += decoder.decode(value, { stream: true });
       const events = buffer.split("\n\n");
       buffer = events.pop() ?? "";
 
       for (const event of events) {
-        for (const part of parseServerSentEvent(event, extractStreamParts)) {
-          progress.report(part);
+        for (const part of parseServerSentEvent(event, extractStreamParts, onUsageData)) {
+          if (localRequestId) {
+            reportProgressWithContextWindowRequest(localRequestId, progress, part);
+          } else {
+            progress.report(part);
+          }
         }
       }
     }
 
-    for (const part of parseServerSentEvent(buffer, extractStreamParts)) {
-      progress.report(part);
+    if (inactivityTimer) { clearTimeout(inactivityTimer); }
+
+    for (const part of parseServerSentEvent(buffer, extractStreamParts, onUsageData)) {
+      if (localRequestId) {
+        reportProgressWithContextWindowRequest(localRequestId, progress, part);
+      } else {
+        progress.report(part);
+      }
     }
   } finally {
-    clearTimeout(timeoutId);
+    clearTimeout(connectionTimeoutId);
+    if (inactivityTimer) { clearTimeout(inactivityTimer); }
     cancellation.dispose();
   }
 }
@@ -716,7 +1040,8 @@ function isNonRetryableHttpError(error: Error): boolean {
 
 function parseServerSentEvent(
   event: string,
-  extractParts: (data: unknown) => vscode.LanguageModelResponsePart[]
+  extractParts: (data: unknown) => vscode.LanguageModelResponsePart[],
+  onData?: (data: unknown) => void,
 ): vscode.LanguageModelResponsePart[] {
   const lines = event
     .split(/\r?\n/)
@@ -732,6 +1057,7 @@ function parseServerSentEvent(
 
     try {
       const data = JSON.parse(line) as unknown;
+      onData?.(data);
       parts.push(...extractParts(data));
     } catch {
       // Ignore malformed SSE lines; the API may send comments or keep-alive frames.
@@ -853,6 +1179,56 @@ function reasoningForToolCalls(
     .filter((value): value is string => Boolean(value?.trim()));
 
   return reasoning.length ? reasoning.join("\n") : undefined;
+}
+
+function updateRequestUsageSummary(
+  summary: RequestUsageSummary,
+  data: unknown,
+): void {
+  if (!isRecord(data)) {
+    return;
+  }
+
+  const usage = isRecord(data.usage) ? data.usage : undefined;
+  if (usage) {
+    const promptTokens =
+      typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : undefined;
+    const completionTokens =
+      typeof usage.completion_tokens === "number"
+        ? usage.completion_tokens
+        : undefined;
+    const totalTokens =
+      typeof usage.total_tokens === "number" ? usage.total_tokens : undefined;
+    const promptTokenDetails = isRecord(usage.prompt_tokens_details)
+      ? usage.prompt_tokens_details
+      : undefined;
+    const cachedTokens =
+      promptTokenDetails &&
+      typeof promptTokenDetails.cached_tokens === "number"
+        ? promptTokenDetails.cached_tokens
+        : undefined;
+
+    if (promptTokens !== undefined) {
+      summary.promptTokens = promptTokens;
+    }
+    if (completionTokens !== undefined) {
+      summary.completionTokens = completionTokens;
+    }
+    if (totalTokens !== undefined) {
+      summary.totalTokens = totalTokens;
+    }
+    if (cachedTokens !== undefined) {
+      summary.cachedTokens = cachedTokens;
+    }
+  }
+
+  const firstChoice =
+    Array.isArray(data.choices) && isRecord(data.choices[0])
+      ? data.choices[0]
+      : undefined;
+  if (firstChoice && typeof firstChoice.finish_reason === "string") {
+    summary.finishReason = firstChoice.finish_reason;
+  }
 }
 
 function messageText(message: vscode.LanguageModelChatRequestMessage): string {

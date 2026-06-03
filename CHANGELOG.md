@@ -2,6 +2,19 @@
 
 All notable changes to the **Z.AI Copilot Chat** extension are documented here.
 
+## 0.2.0 — 2026-06-04
+
+### Added
+- **Token usage tracking** — each Z.AI API response now captures prompt, completion, and total token counts from the streaming response's final usage event
+- **Usage status bar** — new `zai.showUsageStatusBar` setting (default `true`) shows a compact token summary in the VS Code status bar after each response (format: `Z.AI N→M (total) tok`). Hover to see full breakdown including cached tokens and model name.
+- **Usage data emission** — token usage is emitted as `LanguageModelDataPart` into the Copilot Chat response stream. Includes both Copilot-native `usage` MIME type and Z.AI-specific `application/vnd.zai.usage+json`.
+- **Experimental Copilot Chat context indicator** — new `zai.experimentalContextIndicator` setting (default `false`, opt-in) attempts to inject real Z.AI token usage into the Copilot Chat footer context display. Uses VS Code internal APIs and may break across updates.
+- **Usage logging** — each request logs `[usage]` and `[response-summary]` lines to the Z.AI Output channel for diagnostics.
+
+### Changed
+- **Status bar auto-update** — the Z.AI status bar appears on the right side (priority 95) only after a response is received, and resets on new request start
+- **Config change reactivity** — the extension now listens for `onDidChangeConfiguration` to toggle the status bar and experimental context indicator in real time
+
 ## 0.1.2 — 2026-05-31
 
 ### Changed

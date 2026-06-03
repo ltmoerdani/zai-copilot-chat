@@ -2,7 +2,7 @@
   "name": "zai-copilot-chat",
   "displayName": "Z.AI Copilot Chat",
   "description": "Bring your own Z.AI API key to VS Code Copilot Chat. Adds Z.AI GLM models through the Language Model Chat Provider API.",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "publisher": "ltmoerdani",
   "license": "MIT",
   "icon": "media/zai.png",
@@ -90,7 +90,7 @@
           "default": 120000,
           "minimum": 10000,
           "maximum": 300000,
-          "description": "Timeout in milliseconds for each API request. Default 120000 (2 minutes). Increase if you experience frequent timeouts with long contexts."
+          "description": "Connection timeout in ms for API requests. During streaming, a separate inactivity timer (half this value) aborts if no data arrives. Default 120000 (2 min)."
         },
         "zai.maxRetries": {
           "type": "number",
@@ -98,6 +98,16 @@
           "minimum": 0,
           "maximum": 5,
           "description": "Number of automatic retries on transient network errors (fetch failed, timeout, 5xx). Default 2. Set to 0 to disable retries."
+        },
+        "zai.showUsageStatusBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the latest Z.AI usage summary (prompt→output tokens) in the VS Code status bar after each response."
+        },
+        "zai.experimentalContextIndicator": {
+          "type": "boolean",
+          "default": false,
+          "description": "Experimental: attempt to fill the Copilot Chat context indicator with real Z.AI token usage. Depends on VS Code internals and may break across updates."
         }
       }
     },
