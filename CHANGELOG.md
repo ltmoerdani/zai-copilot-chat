@@ -2,6 +2,16 @@
 
 All notable changes to the **Z.AI Copilot Chat** extension are documented here.
 
+## 0.2.1 — 2026-06-04
+
+### Fixed
+- **"Connection timed out after 120000ms" on flagship 200K models** — `glm-5.1`, `glm-5`, `glm-5-turbo`, and `glm-4.7` (200K-context flagship models) frequently timed out on long or cold requests because the default `zai.requestTimeout` (120s) and inactivity window (60s) were too aggressive for their cold-start latency.
+- **Per-model timeout scaling** — the connection timeout and inactivity timer now auto-scale to **1.5×** for 200K-context flagship models (so a 180s base becomes 270s connection / 135s inactivity), while smaller 128K models keep 1× scaling. Effective ceiling is clamped to 300000ms (5 min) as the hard upper bound.
+- **Inactivity timer floor raised to 90s** — the minimum inactivity window is now 90s (was 30s), so a slow first-token or large-context prefill won't kill the request mid-stream. Maximum is 180s.
+- **Default `zai.requestTimeout` raised from 120000 → 180000ms** — 3 minutes is the new default, which is more realistic for flagship Z.AI models on busy or cold sessions.
+- **Improved timeout error message** — when a timeout occurs, the error now includes a concrete hint when a flagship model is in use, and lists four actionable steps: (1) retry, (2) raise `zai.requestTimeout`, (3) try `glm-4.5-flash`, or (4) clear chat history.
+- **Timeout-config logging** — each request now logs `[Timeout config: model=X flagship=Y multiplier=Z× connectionTimeout=…]` to the Z.AI Output channel, so you can see exactly which budget was applied per request.
+
 ## 0.2.0 — 2026-06-04
 
 ### Added

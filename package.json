@@ -2,7 +2,7 @@
   "name": "zai-copilot-chat",
   "displayName": "Z.AI Copilot Chat",
   "description": "Bring your own Z.AI API key to VS Code Copilot Chat. Adds Z.AI GLM models through the Language Model Chat Provider API.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "ltmoerdani",
   "license": "MIT",
   "icon": "media/zai.png",
@@ -87,10 +87,10 @@
         },
         "zai.requestTimeout": {
           "type": "number",
-          "default": 120000,
+          "default": 180000,
           "minimum": 10000,
           "maximum": 300000,
-          "description": "Connection timeout in ms for API requests. During streaming, a separate inactivity timer (half this value) aborts if no data arrives. Default 120000 (2 min)."
+          "description": "Connection timeout in ms for API requests. During streaming, a separate inactivity timer (half this value, min 90s) aborts if no data arrives. Default 180000 (3 min) — flagship models like glm-5.1 (200K context) need longer cold start than smaller models."
         },
         "zai.maxRetries": {
           "type": "number",

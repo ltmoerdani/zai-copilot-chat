@@ -583,8 +583,12 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const isTimeout = message.includes("timed out") || message.includes("Timeout") || message.includes("inactive");
+      const isFlagship = MODEL_LIMITS[model.id]?.contextWindow === 200000;
       const friendlyMsg = isTimeout
-        ? `Request timed out for ${model.id}. Try: (1) use a smaller context, (2) increase zai.requestTimeout, or (3) retry in a moment. Detail: ${message}`
+        ? `Z.AI request to ${model.id} timed out. ${isFlagship
+            ? `glm-5.1 / glm-5 / glm-4.7 are 200K-context flagship models and need longer timeouts (default 3 min, inactivity 90-180s).`
+            : ``
+          } Try: (1) retry — Z.AI servers may be under load, (2) increase \`zai.requestTimeout\` in Settings (max 300000ms), (3) try a smaller/faster model like \`glm-4.5-flash\`, or (4) clear chat history to reduce context size. Detail: ${message}`
         : `Z.AI request failed: ${message}`;
       this.log(`ERROR model=${model.id}: ${message}`);
       this.getOutputChannel().show(true);
@@ -903,18 +907,42 @@ async function doStreamFetch(
   const controller = new AbortController();
   const cancellation = token.onCancellationRequested(() => controller.abort());
 
+  // Per-model timeout scaling.
+  // Flagship 200K-context models (glm-5.1, glm-5, glm-5-turbo, glm-4.7) have
+  // longer cold-start and per-token latency — they need a more generous
+  // inactivity threshold. Use a 1.5x multiplier for 200K models, 1x otherwise.
+  const modelId = typeof body === "object" && body !== null && "model" in body
+    ? String((body as { model: unknown }).model ?? "")
+    : "";
+  const limits = MODEL_LIMITS[modelId];
+  const isFlagshipModel = limits !== undefined && limits.contextWindow >= 200000;
+  const modelTimeoutMultiplier = isFlagshipModel ? 1.5 : 1.0;
+  const effectiveConnectionTimeout = Math.min(
+    300000,
+    Math.round(settings.requestTimeout * modelTimeoutMultiplier)
+  );
+
+  output.appendLine(
+    `[${new Date().toISOString()}] Timeout config: model=${modelId || "?"} ` +
+    `flagship=${isFlagshipModel} multiplier=${modelTimeoutMultiplier}× ` +
+    `connectionTimeout=${effectiveConnectionTimeout}ms ` +
+    `(base=${settings.requestTimeout}ms, max=300000ms)`
+  );
+
   // Connection timeout: abort if the initial connection / headers take too long.
   // This is separate from the inactivity timeout below.
   const connectionTimeoutId = setTimeout(
-    () => controller.abort(new DOMException(`Connection timed out after ${settings.requestTimeout}ms`, "TimeoutError")),
-    settings.requestTimeout
+    () => controller.abort(new DOMException(`Connection timed out after ${effectiveConnectionTimeout}ms`, "TimeoutError")),
+    effectiveConnectionTimeout
   );
 
   // Track the last time we received data, for inactivity detection.
   let lastActivity = Date.now();
   // Inactivity timeout: if no data arrives for this long during streaming, abort.
-  // Defaults to 60s (half the connection timeout, min 30s, max 120s).
-  const inactivityMs = Math.max(30000, Math.min(120000, settings.requestTimeout / 2));
+  // Minimum 90s (so flagship models with slow first-token latency don't get
+  // killed mid-stream), max 180s, and scaled by the same model multiplier.
+  const baseInactivityMs = Math.max(90000, Math.min(180000, settings.requestTimeout / 2));
+  const inactivityMs = Math.min(180000, Math.round(baseInactivityMs * modelTimeoutMultiplier));
   let inactivityTimer: ReturnType<typeof setTimeout> | undefined;
 
   const resetInactivity = () => {

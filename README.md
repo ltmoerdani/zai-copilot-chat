@@ -94,6 +94,34 @@ For advanced usage, you can also run these commands via the Command Palette (`Cm
 | `zai.maxTokens` | `number` | `0` | Max output token override — `0` uses the per-model bundled maximum |
 | `zai.maxInputTokens` | `number` | `0` | Context window override — `0` uses the per-model bundled context size |
 | `zai.debugReasoning` | `boolean` | `false` | Write provider `reasoning_content` to **Output → Z.AI** for debugging |
+| `zai.requestTimeout` | `number` | `180000` | Connection timeout in ms. Auto-scaled **1.5×** for 200K flagship models (glm-5.1/5/4.7) and capped at 300000ms. Inactivity timer scales the same way (90–180s window). |
+| `zai.maxRetries` | `number` | `2` | Automatic retries on transient network errors (fetch failed, timeout, 5xx, 429) with exponential backoff (1s → 2s → max 10s + jitter). |
+| `zai.showUsageStatusBar` | `boolean` | `true` | Show the latest Z.AI usage summary (prompt→output tokens) in the VS Code status bar after each response. |
+| `zai.experimentalContextIndicator` | `boolean` | `false` | Experimental: attempt to fill the Copilot Chat context indicator with real Z.AI token usage. Depends on VS Code internals. |
+
+---
+
+## Troubleshooting
+
+### "Request timed out for glm-5.1" / "Connection timed out after …"
+
+Flagship 200K-context models (`glm-5.1`, `glm-5`, `glm-5-turbo`, `glm-4.7`) have noticeably higher cold-start latency than smaller models — they can take 60–120s to send the **first token** on long or busy sessions.
+
+**The extension already mitigates this automatically:**
+
+- `zai.requestTimeout` defaults to **180000ms (3 min)** — was 120000ms in 0.1.x
+- The effective connection timeout is auto-scaled to **1.5×** for 200K flagship models (so 180s base → 270s)
+- The inactivity timer auto-scales the same way, with a **90s minimum floor** (was 30s)
+
+If you still hit timeouts:
+
+1. **Retry** — Z.AI servers sometimes spike under load; the same prompt may succeed in a few seconds
+2. **Increase `zai.requestTimeout`** in Settings (e.g. 300000 = 5 min max)
+3. **Try a faster model** like `glm-4.5-flash` or `glm-4.7-flash` for code-completion / quick-edit tasks
+4. **Clear chat history** to reduce input token count — large prefill is the main driver of cold-start latency
+5. **Check the Z.AI Output channel** — every request logs `[Timeout config: model=X flagship=Y multiplier=Z× connectionTimeout=…]` so you can confirm which budget was applied
+
+If the issue persists with `zai.requestTimeout = 300000` and a small context, the Z.AI API itself is the bottleneck — try a different Z.AI region/plan or contact [Z.AI support](https://z.ai).
 
 ---
 
