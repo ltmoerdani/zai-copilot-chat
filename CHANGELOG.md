@@ -2,6 +2,11 @@
 
 All notable changes to the **Z.AI Copilot Chat** extension are documented here.
 
+## 0.2.2 — 2026-06-09
+
+### Fixed
+- **"messages.content.type is invalid, allowed values: ['text']" (400)** — Z.AI's API rejects content arrays containing non-text parts (e.g. `image_url`). When VS Code sends conversation history containing `LanguageModelDataPart` instances (screenshots, image attachments), the extension previously forwarded them as `image_url` content parts, causing a hard 400 error. The `convertMessage()` function now strips unsupported content types and always produces plain-string content for Z.AI, eliminating the error.
+
 ## 0.2.1 — 2026-06-04
 
 ### Fixed

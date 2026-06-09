@@ -1157,27 +1157,37 @@ function convertMessage(
   }
 
   // If there are images, build content as an array (OpenAI vision format)
+  // NOTE: Z.AI only accepts type:"text" — strip image_url parts to avoid
+  // "messages.content.type is invalid, allowed values: ['text']" errors.
   if (imageParts.length > 0) {
     const content: ApiContentPart[] = [];
     if (textParts.length > 0) {
       content.push({ type: "text", text: textParts.join("\n") });
     }
-    content.push(...imageParts);
+    // imageParts intentionally omitted — Z.AI API rejects image_url content type.
+    // If images were the only content, fall through to use the text-only path below.
+
+    // Only use array content if we actually have multiple text parts;
+    // otherwise use plain string for maximum API compatibility.
+    const effectiveContent: string | ApiContentPart[] | null =
+      content.length === 0 ? null
+      : content.length === 1 && content[0].type === "text" ? (content[0].text ?? "")
+      : content;
 
     if (role === "assistant" && toolCalls.length) {
       return [{
         role,
-        content: content || null,
+        content: effectiveContent,
         reasoning_content: reasoningForToolCalls(toolCalls, reasoningContentByToolCallId),
         tool_calls: toolCalls
       }];
     }
 
     if (toolResults.length) {
-      return [{ role, content }, ...toolResults];
+      return [{ role, content: effectiveContent }, ...toolResults];
     }
 
-    return [{ role, content }];
+    return [{ role, content: effectiveContent }];
   }
 
   const content = textParts.join("\n");
