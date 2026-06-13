@@ -114,6 +114,8 @@ const DEFAULT_MODEL_LIMITS: BaseModelLimits = {
 // Context window and max output tokens from official Z.AI docs:
 // https://docs.bigmodel.cn/cn/guide/start/model-overview
 const MODEL_LIMITS: Record<string, BaseModelLimits> = {
+  // Text models — 1M context
+  "glm-5.2":        { contextWindow: 1000000, maxOutputTokens: 128000 },
   // Text models — 200K context
   "glm-5.1":        { contextWindow: 200000, maxOutputTokens: 128000 },
   "glm-5":          { contextWindow: 200000, maxOutputTokens: 128000 },
@@ -136,6 +138,8 @@ const MODEL_LIMITS: Record<string, BaseModelLimits> = {
 const VISION_MODELS = new Set(["glm-5v-turbo", "glm-4.6v", "glm-4.6v-flash"]);
 
 const BUNDLED_MODELS = [
+  // Text models — 1M context
+  "glm-5.2",
   // Text models — 200K
   "glm-5.1",
   "glm-5",
@@ -583,10 +587,10 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const isTimeout = message.includes("timed out") || message.includes("Timeout") || message.includes("inactive");
-      const isFlagship = MODEL_LIMITS[model.id]?.contextWindow === 200000;
+      const isFlagship = (MODEL_LIMITS[model.id]?.contextWindow ?? 0) >= 200000;
       const friendlyMsg = isTimeout
         ? `Z.AI request to ${model.id} timed out. ${isFlagship
-            ? `glm-5.1 / glm-5 / glm-4.7 are 200K-context flagship models and need longer timeouts (default 3 min, inactivity 90-180s).`
+            ? `glm-5.2 / glm-5.1 / glm-5 / glm-4.7 are large-context flagship models (200K–1M) and need longer timeouts (default 3 min, inactivity 90-180s).`
             : ``
           } Try: (1) retry — Z.AI servers may be under load, (2) increase \`zai.requestTimeout\` in Settings (max 300000ms), (3) try a smaller/faster model like \`glm-4.5-flash\`, or (4) clear chat history to reduce context size. Detail: ${message}`
         : `Z.AI request failed: ${message}`;
@@ -908,9 +912,9 @@ async function doStreamFetch(
   const cancellation = token.onCancellationRequested(() => controller.abort());
 
   // Per-model timeout scaling.
-  // Flagship 200K-context models (glm-5.1, glm-5, glm-5-turbo, glm-4.7) have
+  // Flagship large-context models (glm-5.2 at 1M, glm-5.1/glm-5/glm-5-turbo/glm-4.7 at 200K) have
   // longer cold-start and per-token latency — they need a more generous
-  // inactivity threshold. Use a 1.5x multiplier for 200K models, 1x otherwise.
+  // inactivity threshold. Use a 1.5x multiplier for 200K+ models, 1x otherwise.
   const modelId = typeof body === "object" && body !== null && "model" in body
     ? String((body as { model: unknown }).model ?? "")
     : "";

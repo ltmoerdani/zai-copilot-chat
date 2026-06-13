@@ -10,13 +10,14 @@
 
 ## What Is This?
 
-**Z.AI for GitHub Copilot Chat** is a VS Code extension that registers [Z.AI](https://z.ai) GLM series models — including **GLM-4.7**, **GLM-5**, **GLM-5.1**, and **GLM-4.5** — into **GitHub Copilot Chat** via the official VS Code *Language Model Chat Provider API*.
+**Z.AI for GitHub Copilot Chat** is a VS Code extension that registers [Z.AI](https://z.ai) GLM series models — including **GLM-5.2**, **GLM-5.1**, **GLM-5**, and **GLM-4.7** — into **GitHub Copilot Chat** via the official VS Code *Language Model Chat Provider API*.
 
 This lets you pick and use Z.AI GLM models directly from the Copilot Chat model picker, just like selecting GPT-4 or Claude — no extra Copilot Pro/Enterprise subscription required. Simply enter your Z.AI API key.
 
 | Model | Context | Max Output | Vision | Description |
 |---|---:|---:|:---:|---|
-| **GLM-5.1** | 200K | 128K | ❌ | Latest flagship, optimized for long-horizon tasks |
+| **GLM-5.2** | 1M | 128K | ❌ | New flagship, 1M context, powerful coding & long-horizon tasks |
+| **GLM-5.1** | 200K | 128K | ❌ | Flagship, optimized for long-horizon tasks |
 | **GLM-5** | 200K | 128K | ❌ | Next-generation GLM, agentic planning |
 | **GLM-5-Turbo** | 200K | 128K | ❌ | Enhanced GLM-5 for complex long tasks |
 | **GLM-4.7** | 200K | 128K | ❌ | High-intelligence model, strong coding |

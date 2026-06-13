@@ -2,6 +2,11 @@
 
 All notable changes to the **Z.AI Copilot Chat** extension are documented here.
 
+## 0.2.3 — 2026-06-14
+
+### Added
+- **GLM-5.2** — Z.AI's new flagship model is now bundled and available in the model picker. Features 1M-token context window, 128K max output tokens, and enhanced coding and long-horizon task capabilities. Automatically benefits from the 1.5× timeout multiplier used by all 200K+ context flagship models.
+
 ## 0.2.2 — 2026-06-09
 
 ### Fixed
