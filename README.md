@@ -87,6 +87,19 @@ For advanced usage, you can also run these commands via the Command Palette (`Cm
 
 ---
 
+## Coding Plan quota
+
+When your API key belongs to a Z.AI Coding Plan subscription, the extension shows a quota indicator `$(graph) Z · NN%` on the right side of the status bar:
+
+- **Hover** the indicator to see a graphical SVG donut chart with two concentric rings — the outer ring for the weekly quota, the inner ring for the rolling 5-hour quota. Each ring is colour-coded: blue (normal), yellow (≥80%), red (≥95%). Below the chart: usage percentages and reset countdowns.
+- **Click** the indicator to toggle the status-bar text between the 5-hour and weekly view.
+- The indicator background turns **yellow** at 80% usage and **red** at 95%.
+- **Z.AI: Manage Provider → Show Quota** opens a detailed markdown report with all quota windows.
+
+The quota is fetched from `https://api.z.ai/api/monitor/usage/quota/limit` and auto-refreshes every 5 minutes (configurable via `zai.quotaRefreshInterval`).
+
+---
+
 ## Settings
 
 | Setting | Type | Default | Description |
@@ -98,6 +111,8 @@ For advanced usage, you can also run these commands via the Command Palette (`Cm
 | `zai.requestTimeout` | `number` | `180000` | Connection timeout in ms. Auto-scaled **1.5×** for 200K flagship models (glm-5.1/5/4.7) and capped at 300000ms. Inactivity timer scales the same way (90–180s window). |
 | `zai.maxRetries` | `number` | `2` | Automatic retries on transient network errors (fetch failed, timeout, 5xx, 429) with exponential backoff (1s → 2s → max 10s + jitter). |
 | `zai.showUsageStatusBar` | `boolean` | `true` | Show the latest Z.AI usage summary (prompt→output tokens) in the VS Code status bar after each response. |
+| `zai.showQuotaStatusBar` | `boolean` | `true` | Show the Z.AI Coding Plan quota (5-hour / weekly) in the VS Code status bar. Hover for a graphical SVG donut chart; click to toggle between windows. |
+| `zai.quotaRefreshInterval` | `number` | `5` | How often (in minutes) to refresh the Z.AI Coding Plan quota. `0` disables automatic refresh. |
 | `zai.experimentalContextIndicator` | `boolean` | `false` | Experimental: attempt to fill the Copilot Chat context indicator with real Z.AI token usage. Depends on VS Code internals. |
 
 ---

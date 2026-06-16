@@ -2,7 +2,7 @@
   "name": "zai-copilot-chat",
   "displayName": "Z.AI Copilot Chat",
   "description": "Bring your own Z.AI API key to VS Code Copilot Chat. Adds Z.AI GLM models through the Language Model Chat Provider API.",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "publisher": "ltmoerdani",
   "license": "MIT",
   "icon": "media/zai.png",
@@ -37,9 +37,6 @@
   ],
   "activationEvents": [
     "onStartupFinished",
-    "onCommand:zai.manage",
-    "onCommand:zai.diagnostics",
-    "onCommand:zai.setApiKey",
     "onLanguageModelChatProvider:zai"
   ],
   "main": "./out/extension.js",
@@ -56,6 +53,14 @@
       {
         "command": "zai.diagnostics",
         "title": "Z.AI: Diagnostics"
+      },
+      {
+        "command": "zai.quota",
+        "title": "Z.AI: Show Quota"
+      },
+      {
+        "command": "zai.toggleQuotaView",
+        "title": "Z.AI: Toggle Quota View"
       }
     ],
     "configuration": {
@@ -104,6 +109,18 @@
           "default": true,
           "description": "Show the latest Z.AI usage summary (prompt→output tokens) in the VS Code status bar after each response."
         },
+        "zai.showQuotaStatusBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the Z.AI Coding Plan quota (5-hour / weekly) in the VS Code status bar. Hover for progress bars; click to toggle between windows."
+        },
+        "zai.quotaRefreshInterval": {
+          "type": "number",
+          "default": 5,
+          "minimum": 0,
+          "maximum": 60,
+          "description": "How often (in minutes) to refresh the Z.AI Coding Plan quota. Set to 0 to disable automatic refresh."
+        },
         "zai.experimentalContextIndicator": {
           "type": "boolean",
           "default": false,
@@ -136,6 +153,7 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "package": "vsce package",
+    "install-local": "vsce package && code --install-extension *.vsix --force",
     "vscode:prepublish": "npm run compile"
   },
   "devDependencies": {

@@ -2,6 +2,11 @@
 
 All notable changes to the **Z.AI Copilot Chat** extension are documented here.
 
+## 0.2.4 — 2026-06-16
+
+### Added
+- **Graphical quota tooltip** — the Z.AI quota status bar now shows a compact SVG donut chart on hover, with two concentric rings for the 5-hour and weekly quota windows. The tooltip is centered, uses minimal screen space.
+- 
 ## 0.2.3 — 2026-06-14
 
 ### Added
