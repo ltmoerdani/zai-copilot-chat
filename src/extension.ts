@@ -15,6 +15,15 @@ import {
   formatUsageStatusBarTooltip,
   type UsageSnapshot,
 } from "./usage";
+import {
+  fetchQuotaSnapshot,
+  formatQuotaLogLine,
+  formatQuotaStatusBarText,
+  formatQuotaTooltip,
+  formatResetCountdown as resetCountdown,
+  hasQuotaSnapshot,
+  type QuotaSnapshot,
+} from "./quota";
 
 const VENDOR = "zai";
 const SECRET_KEY = "zai.apiKey";
@@ -23,6 +32,10 @@ const CHAT_COMPLETIONS_URL = `${API_BASE_URL}/chat/completions`;
 const MODELS_URL = `${API_BASE_URL}/models`;
 
 let usageStatusBarItem: vscode.StatusBarItem | undefined;
+let quotaStatusBarItem: vscode.StatusBarItem | undefined;
+let lastQuotaSnapshot: QuotaSnapshot | undefined;
+let quotaViewMode: "hourly" | "weekly" = "hourly";
+let quotaRefreshTimer: ReturnType<typeof setInterval> | undefined;
 
 type ApiRole = "user" | "assistant" | "tool";
 
@@ -173,6 +186,7 @@ interface OpenAiToolDefinition {
 
 export function activate(context: vscode.ExtensionContext) {
   ensureUsageStatusBar(context);
+  ensureQuotaStatusBar(context);
   void syncExperimentalContextIndicator();
 
   const provider = new ZaiProvider(context);
@@ -182,15 +196,49 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("zai.manage", () => provider.manage()),
     vscode.commands.registerCommand("zai.diagnostics", () => provider.showDiagnostics()),
     vscode.commands.registerCommand("zai.setApiKey", () => provider.setApiKey()),
+    vscode.commands.registerCommand("zai.quota", () => provider.showQuota()),
+    vscode.commands.registerCommand("zai.toggleQuotaView", () => {
+      quotaViewMode = quotaViewMode === "hourly" ? "weekly" : "hourly";
+      if (lastQuotaSnapshot) {
+        updateQuotaStatusBar(lastQuotaSnapshot);
+      } else {
+        void provider.refreshQuotaFromSecret();
+      }
+    }),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration("zai.showUsageStatusBar")) {
         resetUsageStatusBar();
+      }
+      if (event.affectsConfiguration("zai.showQuotaStatusBar")) {
+        resetQuotaStatusBar();
+      }
+      if (event.affectsConfiguration("zai.quotaRefreshInterval")) {
+        setupQuotaRefreshTimer(context);
       }
       if (event.affectsConfiguration("zai.experimentalContextIndicator")) {
         void syncExperimentalContextIndicator();
       }
     }),
   );
+
+  // Initial quota fetch + periodic refresh
+  void provider.refreshQuotaFromSecret();
+  setupQuotaRefreshTimer(context);
+}
+
+function setupQuotaRefreshTimer(context: vscode.ExtensionContext): void {
+  if (quotaRefreshTimer) {
+    clearInterval(quotaRefreshTimer);
+    quotaRefreshTimer = undefined;
+  }
+  const intervalMinutes = vscode.workspace
+    .getConfiguration("zai")
+    .get("quotaRefreshInterval", 5);
+  if (intervalMinutes <= 0) return;
+  const provider = new ZaiProvider(context);
+  quotaRefreshTimer = setInterval(() => {
+    void provider.refreshQuotaFromSecret();
+  }, intervalMinutes * 60_000);
 }
 
 export async function deactivate(): Promise<void> {
@@ -269,6 +317,96 @@ function updateUsageStatusBar(
     usage,
   );
   usageStatusBarItem.show();
+}
+
+function ensureQuotaStatusBar(
+  context: vscode.ExtensionContext,
+): vscode.StatusBarItem | undefined {
+  if (!quotaStatusBarItem) {
+    quotaStatusBarItem = vscode.window.createStatusBarItem(
+      vscode.StatusBarAlignment.Right,
+      94,
+    );
+    quotaStatusBarItem.command = "zai.toggleQuotaView";
+    context.subscriptions.push(quotaStatusBarItem);
+  }
+
+  resetQuotaStatusBar();
+  return quotaStatusBarItem;
+}
+
+function shouldShowQuotaStatusBar(): boolean {
+  return vscode.workspace
+    .getConfiguration("zai")
+    .get("showQuotaStatusBar", true);
+}
+
+function resetQuotaStatusBar(): void {
+  if (!quotaStatusBarItem) {
+    return;
+  }
+
+  if (!shouldShowQuotaStatusBar()) {
+    quotaStatusBarItem.hide();
+    return;
+  }
+
+  const text = formatQuotaStatusBarText(lastQuotaSnapshot, quotaViewMode);
+  if (!text) {
+    quotaStatusBarItem.hide();
+    return;
+  }
+
+  quotaStatusBarItem.text = text;
+  const tooltip = new vscode.MarkdownString(formatQuotaTooltip(lastQuotaSnapshot), true);
+  tooltip.supportHtml = true;
+  tooltip.isTrusted = true;
+  quotaStatusBarItem.tooltip = tooltip;
+  quotaStatusBarItem.show();
+}
+
+function updateQuotaStatusBar(snapshot: QuotaSnapshot): void {
+  lastQuotaSnapshot = snapshot;
+
+  if (!quotaStatusBarItem) {
+    return;
+  }
+
+  if (!shouldShowQuotaStatusBar() || !hasQuotaSnapshot(snapshot)) {
+    quotaStatusBarItem.hide();
+    return;
+  }
+
+  const text = formatQuotaStatusBarText(snapshot, quotaViewMode);
+  if (!text) {
+    quotaStatusBarItem.hide();
+    return;
+  }
+
+  quotaStatusBarItem.text = text;
+  const tooltip = new vscode.MarkdownString(formatQuotaTooltip(snapshot), true);
+  tooltip.supportHtml = true;
+  tooltip.isTrusted = true;
+  quotaStatusBarItem.tooltip = tooltip;
+
+  // Color warnings based on the active view's percentage
+  const window = quotaViewMode === "hourly"
+    ? snapshot.tokenQuotas.find((q) => q.unit === "hour")
+    : snapshot.tokenQuotas.find((q) => q.unit === "week");
+  const pct = window?.percentage ?? 0;
+  if (pct >= 95) {
+    quotaStatusBarItem.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground");
+  } else if (pct >= 80) {
+    quotaStatusBarItem.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
+  } else {
+    quotaStatusBarItem.backgroundColor = undefined;
+  }
+
+  quotaStatusBarItem.show();
+}
+
+export function getLastQuotaSnapshot(): QuotaSnapshot | undefined {
+  return lastQuotaSnapshot;
 }
 
 let hookDiagnosticChannel: vscode.OutputChannel | undefined;
@@ -353,7 +491,8 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
         { label: "Set API Key", action: "set" as const },
         { label: "Clear API Key", action: "clear" as const },
         { label: "Test Connection", action: "test" as const },
-        { label: "Refresh Models", action: "refresh" as const }
+        { label: "Refresh Models", action: "refresh" as const },
+        { label: "Show Quota", action: "quota" as const }
       ],
       {
         title: "Manage Z.AI",
@@ -379,6 +518,11 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
 
     if (choice.action === "test") {
       await this.testConnection();
+      return;
+    }
+
+    if (choice.action === "quota") {
+      await this.showQuota();
       return;
     }
 
@@ -475,6 +619,95 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
 
     const doc = await vscode.workspace.openTextDocument({ content, language: "markdown" });
     await vscode.window.showTextDocument(doc, vscode.ViewColumn.Beside);
+  }
+
+  async showQuota(): Promise<void> {
+    const snapshot = lastQuotaSnapshot;
+    const apiKey = await this.context.secrets.get(SECRET_KEY);
+
+    // Try to refresh quota proactively if we have a key but no snapshot yet.
+    if (apiKey && (!snapshot || !hasQuotaSnapshot(snapshot))) {
+      const statusBar = vscode.window.setStatusBarMessage(`$(loading~spin) Refreshing Z.AI quota...`);
+      try {
+        await this.refreshQuota(apiKey);
+      } finally {
+        statusBar.dispose();
+      }
+    }
+
+    if (!apiKey) {
+      const choice = await vscode.window.showWarningMessage(
+        "Z.AI: No API key set. Configure an API key to view Coding Plan quota.",
+        "Set API Key",
+      );
+      if (choice === "Set API Key") {
+        await this.setApiKey();
+      }
+      return;
+    }
+
+    const current = lastQuotaSnapshot;
+    if (!current || !hasQuotaSnapshot(current)) {
+      vscode.window.showInformationMessage(
+        "Z.AI: Could not retrieve Coding Plan quota. " +
+        "Check the Z.AI management dashboard (z.ai/manage/quota) for authoritative numbers.",
+      );
+      return;
+    }
+
+    const plan = current.planLevel
+      ? ` (${current.planLevel.charAt(0).toUpperCase()}${current.planLevel.slice(1).toLowerCase()} plan)`
+      : "";
+    const lines: string[] = [`# Z.AI Coding Plan quota${plan}`, ""];
+
+    for (const q of current.tokenQuotas) {
+      lines.push(`## ${q.windowName}`);
+      lines.push(`- Usage: ${Math.round(q.percentage)}%`);
+      const reset = resetCountdown(q.nextResetTime, current.capturedAt);
+      if (reset) lines.push(`- Resets in: ${reset}`);
+      lines.push("");
+    }
+
+    if (current.timeLimits.length > 0) {
+      lines.push("## MCP tool limits");
+      for (const tl of current.timeLimits) {
+        lines.push(`- ${tl.windowName}: ${Math.round(tl.percentage)}%`);
+      }
+      lines.push("");
+    }
+
+    lines.push(`_Captured: ${new Date(current.capturedAt).toISOString()}_`);
+
+    const doc = await vscode.workspace.openTextDocument({
+      content: lines.join("\n"),
+      language: "markdown",
+    });
+    await vscode.window.showTextDocument(doc, vscode.ViewColumn.Beside);
+  }
+
+  /** Refresh quota using API key from SecretStorage. */
+  async refreshQuotaFromSecret(): Promise<QuotaSnapshot | undefined> {
+    const apiKey = await this.context.secrets.get(SECRET_KEY);
+    if (!apiKey) {
+      return undefined;
+    }
+    return this.refreshQuota(apiKey);
+  }
+
+  /**
+   * Fetches the current Coding Plan quota from the Z.AI monitor endpoint.
+   */
+  async refreshQuota(apiKey: string): Promise<QuotaSnapshot | undefined> {
+    try {
+      const snapshot = await fetchQuotaSnapshot({ apiKey });
+      updateQuotaStatusBar(snapshot);
+      this.log(`Refreshed quota: ${formatQuotaLogLine(snapshot) ?? "(no fields)"}`);
+      return snapshot;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.log(`Quota refresh failed: ${message}`);
+      return undefined;
+    }
   }
 
   async provideLanguageModelChatInformation(
