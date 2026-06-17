@@ -2,11 +2,23 @@
 
 All notable changes to the **Z.AI Copilot Chat** extension are documented here.
 
-## 0.2.4 — 2026-06-16
+## 0.2.4 — 2026-06-17
 
 ### Added
-- **Graphical quota tooltip** — the Z.AI quota status bar now shows a compact SVG donut chart on hover, with two concentric rings for the 5-hour and weekly quota windows. The tooltip is centered, uses minimal screen space.
-- 
+- **Z.AI Coding Plan quota tracking** — when your API key belongs to a Z.AI Coding Plan subscription, the extension now fetches quota usage from `https://api.z.ai/api/monitor/usage/quota/limit` and displays it in the VS Code status bar. Auto-refreshes every 5 minutes (configurable via `zai.quotaRefreshInterval`). ([PR #2](https://github.com/ltmoerdani/zai-copilot-chat/pull/2) — @nik13513513)
+- **Graphical quota tooltip** — hovering the quota status bar item shows a compact, centered SVG donut chart with two concentric rings: the outer ring represents the weekly quota, the inner ring the rolling 5-hour quota. Each ring is colour-coded: blue (normal), yellow (≥80%), red (≥95%). Below the chart: usage percentages and human-readable reset countdowns. ([PR #2](https://github.com/ltmoerdani/zai-copilot-chat/pull/2))
+- **Quota status bar indicator** — new `$(graph) Z · NN%` status bar item (right side, priority 95) showing the current 5-hour or weekly quota usage percentage. Click to toggle between views. Background turns yellow at 80% and red at 95%. ([PR #2](https://github.com/ltmoerdani/zai-copilot-chat/pull/2))
+- **New commands** — `Z.AI: Show Quota` opens a detailed markdown report of all quota windows; `Z.AI: Toggle Quota View` switches the status bar between 5-hour and weekly display. ([PR #2](https://github.com/ltmoerdani/zai-copilot-chat/pull/2))
+- **New settings** — `zai.showQuotaStatusBar` (default `true`) and `zai.quotaRefreshInterval` (default `5` minutes; `0` disables auto-refresh). ([PR #2](https://github.com/ltmoerdani/zai-copilot-chat/pull/2))
+- **Quota auth error class** — new `QuotaAuthError` sentinel error (with HTTP status) replaces brittle substring matching in the quota fetch retry loop, so auth failures (401/403) are detected reliably across both `Bearer` and raw-key auth attempts. ([PR #3](https://github.com/ltmoerdani/zai-copilot-chat/pull/3) — @nik13513513)
+- **Markdown escaping** — new `escapeMarkdown()` helper safely escapes API-sourced strings (plan level, window names) before interpolating them into the quota tooltip, preventing Markdown injection rendering glitches. ([PR #3](https://github.com/ltmoerdani/zai-copilot-chat/pull/3))
+- **Quota test suite** — new `src/test/quota.test.ts` (217 lines, 10 test cases) covering `parseQuotaSnapshot`, `pickHourlyQuota`/`pickWeeklyQuota`, `formatResetCountdown`, `quotaDonutSvg` (including clamping & undefined handling), `escapeMarkdown`, `QuotaAuthError` detection, and `fetchQuotaSnapshot` auth-retry flow with a mocked `globalThis.fetch`. ([PR #3](https://github.com/ltmoerdani/zai-copilot-chat/pull/3))
+- **New module** — `src/quota.ts` (389 lines) with full quota parsing, formatting, SVG generation, and fetch logic. ([PR #2](https://github.com/ltmoerdani/zai-copilot-chat/pull/2))
+
+### Changed
+- **Status bar fallback** — when quota data is unavailable (no API key, fetch failed), the status bar now shows a persistent `$(graph) Z.AI quota` item with a helpful tooltip instead of hiding silently. ([PR #3](https://github.com/ltmoerdani/zai-copilot-chat/pull/3))
+- **Retry loop clarity** — `fetchQuotaSnapshot`'s catch block now uses `isQuotaAuthError()` for branching instead of regex-matching error messages. ([PR #3](https://github.com/ltmoerdani/zai-copilot-chat/pull/3))
+
 ## 0.2.3 — 2026-06-14
 
 ### Added

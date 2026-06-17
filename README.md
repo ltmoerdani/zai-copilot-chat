@@ -98,6 +98,8 @@ When your API key belongs to a Z.AI Coding Plan subscription, the extension show
 
 The quota is fetched from `https://api.z.ai/api/monitor/usage/quota/limit` and auto-refreshes every 5 minutes (configurable via `zai.quotaRefreshInterval`).
 
+> **If quota data is unavailable** (e.g. no API key set, or the key doesn't belong to a Coding Plan), the status bar shows a persistent `$(graph) Z.AI quota` item with a tooltip linking to **Z.AI: Set API Key**.
+
 ---
 
 ## Settings
@@ -197,11 +199,25 @@ To package a `.vsix` for local install:
 npm run package
 ```
 
+### Tests
+
+The quota module has a unit test suite using Node's built-in test runner:
+
+```bash
+npx tsx --test src/test/quota.test.ts
+```
+
+Covers `parseQuotaSnapshot`, quota window selection, `formatResetCountdown`, SVG donut generation (including clamping), `escapeMarkdown`, `QuotaAuthError` detection, and the `fetchQuotaSnapshot` auth-retry flow.
+
 ---
 
 ## Contributing
 
 Issues and pull requests are welcome. Please open an issue first for significant changes so we can discuss the approach.
+
+### Contributors
+
+- **[@nik13513513](https://github.com/nik13513513)** (Alex Kor) — Z.AI Coding Plan quota tracking, graphical SVG donut tooltip, quota auth error handling, and test suite ([PR #2](https://github.com/ltmoerdani/zai-copilot-chat/pull/2), [PR #3](https://github.com/ltmoerdani/zai-copilot-chat/pull/3))
 
 ---
 
