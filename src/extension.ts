@@ -353,7 +353,15 @@ function resetQuotaStatusBar(): void {
 
   const text = formatQuotaStatusBarText(lastQuotaSnapshot, quotaViewMode);
   if (!text) {
-    quotaStatusBarItem.hide();
+    quotaStatusBarItem.text = "$(graph) Z.AI quota";
+    quotaStatusBarItem.tooltip = new vscode.MarkdownString(
+      "Z.AI quota not available. Click to refresh.\n\nIf you have not set an API key yet, use 'Z.AI: Set API Key'.",
+      true,
+    );
+    quotaStatusBarItem.tooltip.supportHtml = true;
+    quotaStatusBarItem.tooltip.isTrusted = true;
+    quotaStatusBarItem.backgroundColor = undefined;
+    quotaStatusBarItem.show();
     return;
   }
 
@@ -372,14 +380,14 @@ function updateQuotaStatusBar(snapshot: QuotaSnapshot): void {
     return;
   }
 
-  if (!shouldShowQuotaStatusBar() || !hasQuotaSnapshot(snapshot)) {
+  if (!shouldShowQuotaStatusBar()) {
     quotaStatusBarItem.hide();
     return;
   }
 
   const text = formatQuotaStatusBarText(snapshot, quotaViewMode);
   if (!text) {
-    quotaStatusBarItem.hide();
+    resetQuotaStatusBar();
     return;
   }
 

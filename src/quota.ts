@@ -22,6 +22,25 @@
 
 export type QuotaWindowUnit = "hour" | "week" | "month" | "unknown";
 
+/**
+ * Sentinel error class for quota authentication failures (HTTP 401/403).
+ * Thrown by `fetchQuotaSnapshot` so callers — and the retry loop itself — can
+ * detect auth failures without brittle substring matching on error messages.
+ */
+export class QuotaAuthError extends Error {
+  readonly status?: number;
+  constructor(message: string, status?: number) {
+    super(message);
+    this.name = "QuotaAuthError";
+    this.status = status;
+  }
+}
+
+/** Returns true if the given value is a QuotaAuthError. */
+export function isQuotaAuthError(error: unknown): error is QuotaAuthError {
+  return error instanceof QuotaAuthError;
+}
+
 export interface QuotaWindow {
   /** Human-readable window name, e.g. "5-Hour", "1-Week". */
   windowName: string;
@@ -242,6 +261,17 @@ export function formatPlanLabel(level: string | undefined): string {
 }
 
 /**
+ * Escape characters that have meaning in Markdown so untrusted/API-sourced
+ * strings can be safely interpolated into Markdown tooltips. Escapes the core
+ * punctuation set defined by CommonMark: `\ ` * _ [ ] # ! ( ) ~ > |`.
+ */
+export function escapeMarkdown(input: string | undefined): string {
+  if (!input) return "";
+  // Order matters: backslash first.
+  return input.replace(/([\\`*_{}\[\]()#+\-.!~>|])/g, "\\$1");
+}
+
+/**
  * Status bar text: "$(graph) Z · NN% of 5 Hours" style.
  */
 export function formatQuotaStatusBarText(
@@ -283,7 +313,7 @@ export function formatQuotaTooltip(snapshot: QuotaSnapshot | undefined): string 
   const weeklyReset = weekly ? formatResetCountdown(weekly.nextResetTime, snapshot.capturedAt) : undefined;
 
   const plan = formatPlanLabel(snapshot.planLevel);
-  const title = plan ? `Z.AI ${plan} plan` : "Z.AI plan";
+  const title = plan ? `Z.AI ${escapeMarkdown(plan)} plan` : "Z.AI plan";
 
   const legendHourly = hourly
     ? `● 5h: ${Math.round(hourly.percentage)}%${hourlyReset ? ` (${hourlyReset})` : ""}`
@@ -307,7 +337,7 @@ export function formatQuotaTooltip(snapshot: QuotaSnapshot | undefined): string 
   if (snapshot.timeLimits.length > 0) {
     parts.push("");
     for (const tl of snapshot.timeLimits) {
-      parts.push(`${tl.windowName} MCP: ${Math.round(tl.percentage)}%`);
+      parts.push(`${escapeMarkdown(tl.windowName)} MCP: ${Math.round(tl.percentage)}%`);
     }
   }
 
@@ -354,7 +384,7 @@ export async function fetchQuotaSnapshot(opts: QuotaFetchOptions): Promise<Quota
   };
 
   const authFormats = [`Bearer ${opts.apiKey}`, opts.apiKey];
-  let lastError: Error | undefined;
+  let lastError: QuotaAuthError | Error | undefined;
 
   for (const auth of authFormats) {
     try {
@@ -367,7 +397,10 @@ export async function fetchQuotaSnapshot(opts: QuotaFetchOptions): Promise<Quota
       if (!response.ok) {
         const text = await response.text().catch(() => "");
         if (response.status === 401 || response.status === 403) {
-          lastError = new Error(`Auth failed (${response.status}): ${text}`);
+          lastError = new QuotaAuthError(
+            `Auth failed (${response.status}): ${text}`,
+            response.status,
+          );
           continue;
         }
         throw new Error(`Quota request failed (${response.status}): ${text}`);
@@ -376,12 +409,12 @@ export async function fetchQuotaSnapshot(opts: QuotaFetchOptions): Promise<Quota
       const json = await response.json();
       return parseQuotaSnapshot(unwrapData(json));
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (/Auth failed/.test(message)) {
-        lastError = error instanceof Error ? error : new Error(message);
+      // Auth errors are retryable (next auth format); everything else bubbles up.
+      if (isQuotaAuthError(error)) {
+        lastError = error;
         continue;
       }
-      throw error instanceof Error ? error : new Error(message);
+      throw error instanceof Error ? error : new Error(String(error));
     }
   }
 
