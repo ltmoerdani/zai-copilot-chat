@@ -180,10 +180,21 @@ function strokeForPct(pct: number): string {
  * rings**: the outer ring represents the weekly quota, the inner ring the
  * 5-hour quota. Designed to take minimal screen space in a tooltip.
  */
+/** Default text color chosen to stay legible on both light and dark tooltip backgrounds. */
+const DEFAULT_TEXT_COLOR = "#e8e8e8";
+
+export interface QuotaDonutOptions {
+  size?: number;
+  hourlyLabel?: string;
+  weeklyLabel?: string;
+  /** CSS color used for the central percentage and label text. Defaults to a light gray. */
+  textColor?: string;
+}
+
 export function quotaDonutSvg(
   hourlyPct: number | undefined,
   weeklyPct: number | undefined,
-  options: { size?: number; hourlyLabel?: string; weeklyLabel?: string } = {},
+  options: QuotaDonutOptions = {},
 ): string {
   const size = options.size ?? 96;
   const center = size / 2;
@@ -203,6 +214,7 @@ export function quotaDonutSvg(
   const innerColor = strokeForPct(innerClamped);
 
   const trackColor = "rgba(128,128,128,0.25)";
+  const textColor = options.textColor ?? DEFAULT_TEXT_COLOR;
 
   const hourlyLabel = options.hourlyLabel ?? "5h";
   const weeklyLabel = options.weeklyLabel ?? "wk";
@@ -218,8 +230,8 @@ export function quotaDonutSvg(
     <circle cx="${center}" cy="${center}" r="${innerR}" fill="none" stroke="${innerColor}" stroke-width="${stroke}"
       stroke-dasharray="${innerCircumference.toFixed(2)}" stroke-dashoffset="${innerOffset.toFixed(2)}" stroke-linecap="round" />
   </g>
-  <text x="${center}" y="${center - 1}" text-anchor="middle" dominant-baseline="central" font-size="15" font-weight="700" fill="currentColor">${hourlyText}</text>
-  <text x="${center}" y="${center + 12}" text-anchor="middle" font-size="7" fill="currentColor" opacity="0.7">${hourlyLabel}</text>
+  <text x="${center}" y="${center - 1}" text-anchor="middle" dominant-baseline="central" font-size="15" font-weight="700" fill="${textColor}">${hourlyText}</text>
+  <text x="${center}" y="${center + 12}" text-anchor="middle" font-size="7" fill="${textColor}" opacity="0.7">${hourlyLabel}</text>
 </svg>`;
 }
 
@@ -292,8 +304,16 @@ export function formatQuotaStatusBarText(
 /**
  * Markdown tooltip with a compact, centered dual-ring SVG donut chart.
  * Renders in VS Code's native status-bar hover tooltip.
+ *
+ * @param options.textColor Optional CSS color for the chart text. Pass a
+ *   theme-appropriate value (e.g. light gray for dark themes, dark gray for
+ *   light themes) — the SVG is embedded as an image so it cannot inherit
+ *   `currentColor` from the host.
  */
-export function formatQuotaTooltip(snapshot: QuotaSnapshot | undefined): string {
+export function formatQuotaTooltip(
+  snapshot: QuotaSnapshot | undefined,
+  options: { textColor?: string } = {},
+): string {
   if (!snapshot || !hasQuotaSnapshot(snapshot)) {
     return "Z.AI quota not available. Click to refresh.";
   }
@@ -306,6 +326,7 @@ export function formatQuotaTooltip(snapshot: QuotaSnapshot | undefined): string 
   const svg = quotaDonutSvg(hourlyPct, weeklyPct, {
     hourlyLabel: "5h",
     weeklyLabel: "wk",
+    textColor: options.textColor,
   });
   const dataUri = svgToDataUri(svg);
 

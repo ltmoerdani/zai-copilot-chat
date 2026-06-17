@@ -112,6 +112,20 @@ test("quotaDonutSvg: produces a valid SVG with clamped percentages", () => {
   assert.ok(overOffsets.every((o) => o < 1), "clamped 100% should produce near-zero offsets");
 });
 
+test("quotaDonutSvg: default text color is light gray (legible on dark backgrounds)", () => {
+  const svg = quotaDonutSvg(50, 75);
+  // The chart is rendered as an embedded image, so it cannot inherit
+  // `currentColor`. The default must be an explicit light color so it stays
+  // visible against dark-theme tooltip backgrounds.
+  assert.match(svg, /fill="#e8e8e8"/);
+  assert.doesNotMatch(svg, /fill="currentColor"/);
+});
+
+test("quotaDonutSvg: textColor option overrides the default", () => {
+  const svg = quotaDonutSvg(10, 20, { textColor: "#123abc" });
+  assert.match(svg, /fill="#123abc"/);
+});
+
 test("quotaDonutSvg: undefined percentages render em-dash placeholders", () => {
   const svg = quotaDonutSvg(undefined, undefined);
   assert.match(svg, />—</);
