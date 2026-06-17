@@ -153,18 +153,13 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "package": "vsce package",
-    "install-local": "vsce package --out zai-copilot-chat.vsix && code --install-extension zai-copilot-chat.vsix --force",
-    "vscode:prepublish": "npm run compile",
-    "pretest": "npm run compile",
-    "test": "node --test out/test/*.test.js"
+    "install-local": "vsce package && code --install-extension *.vsix --force",
+    "vscode:prepublish": "npm run compile"
   },
   "devDependencies": {
     "@types/node": "^20.19.0",
     "@types/vscode": "^1.118.0",
-    "@vscode/vsce": "2.20.0",
+    "@vscode/vsce": "^3.6.0",
     "typescript": "^5.9.3"
-  },
-  "overrides": {
-    "cheerio": "1.0.0-rc.9"
   }
 }
