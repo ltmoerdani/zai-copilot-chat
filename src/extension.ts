@@ -219,6 +219,14 @@ export function activate(context: vscode.ExtensionContext) {
         void syncExperimentalContextIndicator();
       }
     }),
+    // Repaint the quota donut SVG immediately when the color theme changes,
+    // so the chart text color stays in sync with the new background instead of
+    // only refreshing on the next quota fetch / status-bar toggle.
+    vscode.window.onDidChangeActiveColorTheme(() => {
+      if (lastQuotaSnapshot) {
+        resetQuotaStatusBar();
+      }
+    }),
   );
 
   // Initial quota fetch + periodic refresh
@@ -341,6 +349,22 @@ function shouldShowQuotaStatusBar(): boolean {
     .get("showQuotaStatusBar", true);
 }
 
+/**
+ * Resolve a text color for the embedded SVG quota chart.
+ *
+ * The donut SVG is rendered as a `data:` URI image, so it cannot inherit
+ * `currentColor` from the tooltip. We pick a contrasting color based on the
+ * active color theme kind so the percentage stays legible on both light and
+ * dark backgrounds.
+ */
+function quotaChartTextColor(): string {
+  const kind = vscode.window.activeColorTheme.kind;
+  // Light covers Light + HighContrastLight (when available); everything else
+  // (Dark, HighContrast/HighContrastDark) is treated as dark.
+  const isLight = kind === vscode.ColorThemeKind.Light;
+  return isLight ? "#1e1e1e" : "#e8e8e8";
+}
+
 function resetQuotaStatusBar(): void {
   if (!quotaStatusBarItem) {
     return;
@@ -366,7 +390,10 @@ function resetQuotaStatusBar(): void {
   }
 
   quotaStatusBarItem.text = text;
-  const tooltip = new vscode.MarkdownString(formatQuotaTooltip(lastQuotaSnapshot), true);
+  const tooltip = new vscode.MarkdownString(
+    formatQuotaTooltip(lastQuotaSnapshot, { textColor: quotaChartTextColor() }),
+    true,
+  );
   tooltip.supportHtml = true;
   tooltip.isTrusted = true;
   quotaStatusBarItem.tooltip = tooltip;
@@ -392,7 +419,10 @@ function updateQuotaStatusBar(snapshot: QuotaSnapshot): void {
   }
 
   quotaStatusBarItem.text = text;
-  const tooltip = new vscode.MarkdownString(formatQuotaTooltip(snapshot), true);
+  const tooltip = new vscode.MarkdownString(
+    formatQuotaTooltip(snapshot, { textColor: quotaChartTextColor() }),
+    true,
+  );
   tooltip.supportHtml = true;
   tooltip.isTrusted = true;
   quotaStatusBarItem.tooltip = tooltip;
