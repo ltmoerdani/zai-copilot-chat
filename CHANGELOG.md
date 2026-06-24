@@ -2,6 +2,11 @@
 
 All notable changes to the **Z.AI Copilot Chat** extension are documented here.
 
+## 0.2.5 — 2026-06-24
+
+### Fixed
+- **Model picker crash on VS Code 1.126** (`a.charAt is not a function`) — the `provideLanguageModelChatInformation()` provider returned `category` as an object `{ label, order }`, but VS Code 1.126's `chatModelPicker.ts` sorts model entries by calling `a.charAt()` on the `category` value, expecting a **string**. Sending an object caused a `TypeError` every time the picker popup was opened, making the dropdown completely unresponsive. The `category` field is now a plain string (`"Z.AI"`).
+
 ## 0.2.4 — 2026-06-17
 
 ### Added

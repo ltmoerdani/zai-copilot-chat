@@ -776,10 +776,10 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
         version: "1.0.0",
         detail: "Z.AI",
         tooltip: `Z.AI model: ${modelId}`,
-        category: {
-          label: "Z.AI",
-          order: 2
-        },
+        // VS Code 1.126 chatModelPicker.ts expects category as string (or omitted).
+        // Sending an object { label, order } crashes the model picker popup
+        // with "a.charAt is not a function" during sort/compare.
+        category: "Z.AI",
         isUserSelectable: true,
         maxInputTokens: limits.advertisedMaxInputTokens,
         maxOutputTokens: limits.advertisedMaxOutputTokens,
