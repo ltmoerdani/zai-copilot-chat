@@ -147,6 +147,67 @@
           }
         }
       }
+    ],
+    "languageModelTools": [
+      {
+        "name": "zai_webSearch",
+        "displayName": "Z.AI Web Search",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "zai-search",
+        "icon": "$(search)",
+        "modelDescription": "Search the web using the Z.AI Web Search API. Returns up to 20 results with title, url and a short snippet. The results are intent-optimised for LLM consumption. Use this tool whenever the user asks about fresh internet content, recent events, documentation, or facts you are not certain about. For deeper coverage, call this tool multiple times with different query phrasings, then call zai_webRead on the most relevant URLs.",
+        "userDescription": "Search the web via Z.AI",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Natural-language search query. Be specific and focused; for broad topics, prefer multiple narrow queries."
+            },
+            "count": {
+              "type": "number",
+              "default": 10,
+              "minimum": 1,
+              "maximum": 20,
+              "description": "Number of results to return. Keep small (5-10) for quick lookups, larger (15-20) for research."
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      },
+      {
+        "name": "zai_webRead",
+        "displayName": "Z.AI Web Reader",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "zai-read",
+        "icon": "$(book)",
+        "modelDescription": "Read and extract the main content of a single URL using the Z.AI Web Reader API. Returns clean markdown (boilerplate, navigation and ads removed server-side). Use this tool when a search snippet is insufficient and you need the full article text. Always prefer this over asking the user to open a browser.",
+        "userDescription": "Read a URL via Z.AI",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "format": "uri",
+              "description": "Absolute http(s) URL to read. Must include the scheme."
+            },
+            "format": {
+              "type": "string",
+              "enum": [
+                "markdown",
+                "text"
+              ],
+              "default": "markdown",
+              "description": "Output format. 'markdown' preserves headings/links; 'text' is plain prose."
+            }
+          },
+          "required": [
+            "url"
+          ]
+        }
+      }
     ]
   },
   "scripts": {
@@ -158,8 +219,14 @@
   },
   "devDependencies": {
     "@types/node": "^20.19.0",
+    "@types/normalize-url": "^4.1.0",
     "@types/vscode": "^1.118.0",
     "@vscode/vsce": "^3.6.0",
     "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "normalize-url": "^8.1.1",
+    "p-limit": "^3.1.0",
+    "robots-parser": "^3.0.1"
   }
 }

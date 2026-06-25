@@ -24,6 +24,7 @@ import {
   hasQuotaSnapshot,
   type QuotaSnapshot,
 } from "./quota";
+import { registerResearchFeatures } from "./research";
 
 const VENDOR = "zai";
 const SECRET_KEY = "zai.apiKey";
@@ -232,6 +233,11 @@ export function activate(context: vscode.ExtensionContext) {
   // Initial quota fetch + periodic refresh
   void provider.refreshQuotaFromSecret();
   setupQuotaRefreshTimer(context);
+
+  // Register Z.AI web search + web reader language model tools (Part A of
+  // the deep research feature). Safe to call even if no API key is set — the
+  // tools surface a helpful error message back to the LLM in that case.
+  registerResearchFeatures(context);
 }
 
 function setupQuotaRefreshTimer(context: vscode.ExtensionContext): void {
