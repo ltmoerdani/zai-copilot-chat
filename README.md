@@ -41,6 +41,56 @@ This lets you pick and use Z.AI GLM models directly from the Copilot Chat model 
 - **Tool-calling support** — forwards tool schemas using OpenAI-compatible chat completions
 - **Reasoning debug** — opt-in `reasoning_content` logging to the Z.AI output channel
 - **Diagnostics command** — one-click markdown report showing exactly which models VS Code has registered
+- **Deep research** — `@zai.research` chat participant + `#zai-search` / `#zai-read` tools that fetch **hundreds of sources** via the Z.AI Web Search + Web Reader APIs, then synthesise a cited report. See [Deep Research](#-deep-research) below.
+
+---
+
+## 🔬 Deep Research
+
+Two complementary ways to give Copilot Chat live internet access — far beyond the 2–3 links the built-in Copilot web search returns.
+
+### A. Language Model Tools (single-shot)
+
+Reference them inline with `#` in any chat, or let Copilot Agent mode pick them automatically:
+
+| Tool | Reference | What it does |
+|---|---|---|
+| `zai_webSearch` | `#zai-search` | Search the web via Z.AI Web Search API. Returns up to 20 results (title + URL + snippet). |
+| `zai_webRead`  | `#zai-read`   | Fetch + extract the main content of a single URL as clean markdown via Z.AI Web Reader API. |
+
+Example: `#zai-search latest GLM 5.2 benchmarks` → Copilot sees the results and can chain into `#zai-read <url>` for full text.
+
+### B. `@zai.research` participant (multi-iteration, hundreds of sources)
+
+For thorough research the participant runs its own loop, bypassing Copilot's per-turn tool-call cap:
+
+1. **Plan** — the synthesis model generates 5–10 diverse search queries from your topic.
+2. **Search** — queries run in parallel (bounded by `zai.research.concurrency`).
+3. **Read** — top URLs are fetched via Z.AI Web Reader with two-tier caching.
+4. **Rank** — sources are deduped and scored (BM25-style term overlap + recency boost).
+5. **Expand** — if budget remains and coverage is thin, new queries are generated from the gaps and the loop repeats.
+6. **Synthesise** — sources are chunked, each chunk is summarised (map), then a final cited report is produced (reduce).
+
+```mermaid
+flowchart TD
+    U["@zai.research topic"] --> Plan[Plan: 5-10 queries]
+    Plan --> Search[Parallel search]
+    Search --> Read[Parallel webRead + cache]
+    Read --> Rank[Dedupe + BM25 rank]
+    Rank --> Done{Budget ok?}
+    Done -- no --> Synth[Map-reduce synthesize + citations]
+    Done -- yes --> Expand[Expand: 3-5 follow-up queries]
+    Expand --> Search
+    Synth --> Out[Render report + clickable sources]
+```
+
+**Commands:**
+
+- `@zai.research /quick <topic>` — ~20 sources, 1–2 iterations, ~30s. Cheap and fast.
+- `@zai.research /deep <topic>` — up to 100+ sources, up to 5 iterations. Slower but thorough.
+- `@zai.research <topic>` (no command) — defaults to `/quick`.
+
+The final response is a markdown report with inline `[n]` citations and a clickable **Sources** list.
 
 ---
 
@@ -116,6 +166,11 @@ The quota is fetched from `https://api.z.ai/api/monitor/usage/quota/limit` and a
 | `zai.showQuotaStatusBar` | `boolean` | `true` | Show the Z.AI Coding Plan quota (5-hour / weekly) in the VS Code status bar. Hover for a graphical SVG donut chart; click to toggle between windows. |
 | `zai.quotaRefreshInterval` | `number` | `5` | How often (in minutes) to refresh the Z.AI Coding Plan quota. `0` disables automatic refresh. |
 | `zai.experimentalContextIndicator` | `boolean` | `false` | Experimental: attempt to fill the Copilot Chat context indicator with real Z.AI token usage. Depends on VS Code internals. |
+| `zai.research.maxSources` | `number` | `100` | Max sources fetched during a `@zai.research /deep` run. Lower to reduce cost/latency. |
+| `zai.research.maxIterations` | `number` | `5` | Max query-expansion iterations before synthesis (`1`–`10`). |
+| `zai.research.concurrency` | `number` | `10` | Parallel HTTP requests during search + read phases. Higher is faster but may hit rate limits. |
+| `zai.research.cacheTTL` | `number` | `3600` | Cache TTL in seconds for Z.AI search + read results. `0` disables caching. |
+| `zai.research.synthesisModel` | `string` | `glm-5.2` | Z.AI model used for planning queries and synthesising the final report. Use a high-context model for deep research. |
 
 ---
 

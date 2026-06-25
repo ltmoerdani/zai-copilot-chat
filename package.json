@@ -125,9 +125,61 @@
           "type": "boolean",
           "default": false,
           "description": "Experimental: attempt to fill the Copilot Chat context indicator with real Z.AI token usage. Depends on VS Code internals and may break across updates."
+        },
+        "zai.research.maxSources": {
+          "type": "number",
+          "default": 100,
+          "minimum": 5,
+          "maximum": 500,
+          "description": "Maximum number of sources fetched during a deep research run (`@zai.research /deep`). Lower this to reduce cost and latency."
+        },
+        "zai.research.maxIterations": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "maximum": 10,
+          "description": "Maximum query-expansion iterations before final synthesis. Each iteration searches new queries derived from coverage gaps."
+        },
+        "zai.research.concurrency": {
+          "type": "number",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 30,
+          "description": "Number of parallel HTTP requests during the search + read phases. Higher is faster but may hit rate limits."
+        },
+        "zai.research.cacheTTL": {
+          "type": "number",
+          "default": 3600,
+          "minimum": 0,
+          "maximum": 86400,
+          "description": "Cache time-to-live in seconds for Z.AI search and read results. Set to 0 to disable caching. Default 1 hour."
+        },
+        "zai.research.synthesisModel": {
+          "type": "string",
+          "default": "glm-5.2",
+          "description": "Z.AI model used for planning queries and synthesizing the final research report. Use a high-context model (e.g. glm-5.2 with 1M context) for deep research."
         }
       }
     },
+    "chatParticipants": [
+      {
+        "id": "zai.research",
+        "name": "zai",
+        "fullName": "Z.AI Research",
+        "description": "Deep research agent powered by Z.AI Web Search + Web Reader. Iterates queries, fetches many sources, and synthesizes a report with inline citations.",
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "deep",
+            "description": "Maximum depth: 100+ sources, multiple iterations. Slower but thorough."
+          },
+          {
+            "name": "quick",
+            "description": "Quick mode: 20 sources, 1-2 iterations. Fast and cheap."
+          }
+        ]
+      }
+    ],
     "languageModelChatProviders": [
       {
         "vendor": "zai",
@@ -213,19 +265,18 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
+    "test": "tsc -p ./ && node --test out/test/**/*.test.js",
     "package": "vsce package",
     "install-local": "vsce package && code --install-extension *.vsix --force",
     "vscode:prepublish": "npm run compile"
   },
   "devDependencies": {
     "@types/node": "^20.19.0",
-    "@types/normalize-url": "^4.1.0",
     "@types/vscode": "^1.118.0",
     "@vscode/vsce": "^3.6.0",
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "normalize-url": "^8.1.1",
     "p-limit": "^3.1.0",
     "robots-parser": "^3.0.1"
   }

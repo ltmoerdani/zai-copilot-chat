@@ -54,3 +54,68 @@ export class ZaiApiError extends Error {
     this.name = "ZaiApiError";
   }
 }
+
+// ---------------------------------------------------------------------------
+// Phase 2 — Participant / orchestrator types
+// ---------------------------------------------------------------------------
+
+/** A fetched, ranked source ready for synthesis. */
+export interface ResearchSource {
+  url: string;
+  title: string;
+  /** Extracted main content (markdown). May be truncated for very long pages. */
+  content: string;
+  /** Relevance score in [0, 1] assigned by the ranker. */
+  score: number;
+  /** Where this source came from (which query surfaced it). */
+  discoveredByQuery?: string;
+}
+
+/** A citation surfaced in the final synthesis. */
+export interface Citation {
+  index: number;
+  url: string;
+  title: string;
+}
+
+/** Phase emitted by the orchestrator for progress reporting. */
+export type ResearchPhase =
+  | { kind: "plan"; queries: string[] }
+  | { kind: "search"; query: string; resultCount: number }
+  | { kind: "read"; url: string; title?: string; ok: boolean }
+  | { kind: "rank"; kept: number; dropped: number }
+  | { kind: "synthesize"; chunks: number }
+  | { kind: "done"; sources: number; citations: number };
+
+/** Resolved configuration for a single research run. */
+export interface ResearchConfig {
+  maxSources: number;
+  maxIterations: number;
+  /** Parallel HTTP requests during the fetch phase. */
+  concurrency: number;
+  /** Cache TTL in seconds. 0 disables cache. */
+  cacheTtlSeconds: number;
+  /** Model id used for planning / synthesis LLM calls. */
+  synthesisModel: string;
+  /** Mode hint surfaced by the participant command. */
+  mode: "quick" | "deep";
+}
+
+/** Result returned by the orchestrator at the end of a run. */
+export interface ResearchResult {
+  /** Final synthesis text (markdown). */
+  synthesis: string;
+  /** Ordered list of citations referenced in the synthesis. */
+  citations: Citation[];
+  /** All sources that survived ranking. */
+  sources: ResearchSource[];
+  /** Diagnostics for the output channel / telemetry. */
+  stats: {
+    queriesRun: number;
+    urlsConsidered: number;
+    sourcesRead: number;
+    iterations: number;
+    durationMs: number;
+  };
+}
+

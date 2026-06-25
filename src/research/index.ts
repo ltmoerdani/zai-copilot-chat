@@ -1,17 +1,18 @@
 /**
- * Public entry point for the Z.AI research feature (Phase 1 — Part A).
+ * Public entry point for the Z.AI research feature.
  *
- * Wires up the {@link ZaiApiClient} and registers the two language model tools
- * (`zai_webSearch`, `zai_webRead`) with VS Code. Called once from
- * `extension.ts#activate`.
+ * Phase 1 — Language Model Tools (`zai_webSearch`, `zai_webRead`).
+ * Phase 2 — Chat participant `@zai.research` with the deep-research loop.
  *
- * Phase 2 will add the `@zai.research` chat participant here as well.
+ * Wires up the shared {@link ZaiApiClient}, registers the tools and the
+ * participant with VS Code. Called once from `extension.ts#activate`.
  */
 
 import * as vscode from "vscode";
 import { ZaiApiClient } from "./zaiApiClient";
 import { ZaiWebSearchTool } from "./webSearchTool";
 import { ZaiWebReadTool } from "./webReadTool";
+import { registerResearchParticipant } from "./researchParticipant";
 
 /** Tool name constants — must match `contributes.languageModelTools` in package.json. */
 export const WEB_SEARCH_TOOL_NAME = "zai_webSearch";
@@ -60,10 +61,12 @@ export function registerResearchFeatures(
       WEB_READ_TOOL_NAME,
       new ZaiWebReadTool(clientProvider),
     ),
+    registerResearchParticipant({ context, client, outputChannel }),
   );
 
   outputChannel.appendLine(
-    `[${new Date().toISOString()}] Z.AI research tools registered: ${WEB_SEARCH_TOOL_NAME}, ${WEB_READ_TOOL_NAME}`,
+    `[${new Date().toISOString()}] Z.AI research features registered: ` +
+    `${WEB_SEARCH_TOOL_NAME}, ${WEB_READ_TOOL_NAME}, @zai.research`,
   );
 }
 
