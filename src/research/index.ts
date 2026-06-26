@@ -1,13 +1,16 @@
 /**
  * Public entry point for the Z.AI research feature.
  *
- * Architecture (revised 2026-06-26 — clean UI):
+ * Architecture (revised 2026-06-27 — scoped MCP):
  * - The participant `@zai.research` is the only chat-surface entry point.
  *   It embeds MCP tool invocation directly via `vscode.lm.invokeTool()`.
- * - The MCP servers themselves are configured **out of band** by the
- *   `Z.AI: Setup MCP Servers` command, which writes the user's
- *   `mcp.json` with both servers and the API key.
- * - This keeps the chat dropdown focused: only `@zai.research` shows.
+ * - The MCP servers are registered via `vscode.lm.registerMcpServerDefinitionProvider`
+ *   which **resolves on-demand** (only when a tool is actually invoked).
+ *   This means the Z.AI Web Search + Reader tools are NOT globally available
+ *   to Copilot Agent by default — they only activate when `@z-research`
+ *   invokes them. Regular Copilot Agent chat is unaffected.
+ * - No `mcp.json` file is written to the user's config dir. The servers
+ *   live entirely in the extension's runtime.
  *
  * Called once from `extension.ts#activate`.
  */
@@ -23,11 +26,14 @@ const SECRET_KEY = "zai.apiKey";
 const MCP_WEB_SEARCH_URL = "https://api.z.ai/api/mcp/web_search_prime/mcp";
 const MCP_WEB_READER_URL = "https://api.z.ai/api/mcp/web_reader/mcp";
 
+/** Provider id — must match `contributes.mcpServerDefinitionProviders` in package.json. */
+const MCP_PROVIDER_ID = "zai.mcpProvider";
+
 /**
- * Register the @zai.research participant and the `Z.AI: Setup MCP Servers`
- * command. The MCP servers themselves are NOT registered as a definition
- * provider — the user is expected to run the setup command which writes
- * the MCP configuration to their VS Code user `mcp.json`.
+ * Register the @zai.research participant and the MCP server definition
+ * provider. The MCP servers are NOT written to the user's `mcp.json` —
+ * they are provided dynamically via `registerMcpServerDefinitionProvider`
+ * and resolved on-demand (only when a tool is invoked).
  */
 export function registerResearchFeatures(
   context: vscode.ExtensionContext,
@@ -42,152 +48,61 @@ export function registerResearchFeatures(
     outputChannel,
   });
 
+  // --- MCP Server Definition Provider (scoped, on-demand) ---
+  // This registers the Z.AI Web Search + Web Reader as MCP servers that
+  // VS Code knows about, but they are only resolved (started) when a tool
+  // is actually invoked — not eagerly at startup. The `resolveMcpServerDefinition`
+  // callback checks for the API key and returns the server definition with
+  // the auth header. If no key is set, it returns undefined (server skipped).
+  context.subscriptions.push(
+    vscode.lm.registerMcpServerDefinitionProvider(MCP_PROVIDER_ID, {
+      provideMcpServerDefinitions(_token: vscode.CancellationToken) {
+        return [
+          new vscode.McpHttpServerDefinition(
+            "Z.AI Web Search",
+            vscode.Uri.parse(MCP_WEB_SEARCH_URL),
+          ),
+          new vscode.McpHttpServerDefinition(
+            "Z.AI Web Reader",
+            vscode.Uri.parse(MCP_WEB_READER_URL),
+          ),
+        ];
+      },
+      async resolveMcpServerDefinition(
+        server: vscode.McpHttpServerDefinition,
+        _token: vscode.CancellationToken,
+      ): Promise<vscode.McpHttpServerDefinition | undefined> {
+        const apiKey = await context.secrets.get(SECRET_KEY);
+        if (!apiKey) {
+          outputChannel.appendLine(
+            `[${new Date().toISOString()}] [mcp-provider] No API key — skipping "${server.label}"`,
+          );
+          return undefined;
+        }
+        return new vscode.McpHttpServerDefinition(
+          server.label,
+          server.uri,
+          { Authorization: `Bearer ${apiKey}` },
+        );
+      },
+    }),
+  );
+
   // --- Chat Participant (@zai.research) ---
   context.subscriptions.push(
     registerResearchParticipant({ context, mcpTools, outputChannel }),
   );
 
-  // --- Setup command (writes mcp.json once) ---
-  context.subscriptions.push(
-    vscode.commands.registerCommand("zai.setupMcp", async () => {
-      await runSetupMcpCommand(context, outputChannel);
-    }),
-  );
-
   outputChannel.appendLine(
     `[${new Date().toISOString()}] Z.AI research features registered: ` +
       `participant(@z-research), ` +
-      `command(zai.setupMcp)`,
+      `mcpProvider(${MCP_PROVIDER_ID}, on-demand resolve)`,
   );
 }
 
 /**
- * Read a configured MCP tool name from `zai.research.<key>`. The tool names
- * VS Code actually exposes (e.g. `mcp_mcp-web-searc_web_search_prime`) are
- * subject to change between VS Code versions, so we expose them as settings
- * for easy override without code changes.
+ * Read a configured MCP tool name from `zai.research.<key>`.
  */
 function readMcpToolName(key: string, fallback: string): string {
   return vscode.workspace.getConfiguration("zai.research").get(key, fallback);
-}
-
-/**
- * Write the Z.AI MCP server configuration to the user's `mcp.json` file.
- * The user must reload VS Code after this runs.
- */
-async function runSetupMcpCommand(
-  context: vscode.ExtensionContext,
-  outputChannel: vscode.OutputChannel,
-): Promise<void> {
-  const apiKey = await context.secrets.get(SECRET_KEY);
-  if (!apiKey) {
-    vscode.window.showWarningMessage(
-      "Z.AI: Set your API key first ('Z.AI: Set API Key'), then run this command again.",
-    );
-    return;
-  }
-
-  const configPath = await resolveMcpJsonUri();
-  if (!configPath) {
-    vscode.window.showErrorMessage(
-      "Z.AI: Could not locate VS Code's mcp.json path. Configure MCP servers manually.",
-    );
-    return;
-  }
-
-  let existing: Record<string, unknown> = {};
-  try {
-    const raw = await vscode.workspace.fs.readFile(configPath);
-    const parsed = JSON.parse(Buffer.from(raw).toString("utf8"));
-    if (parsed && typeof parsed === "object" && parsed.servers && typeof parsed.servers === "object") {
-      existing = parsed.servers as Record<string, unknown>;
-    }
-  } catch {
-    // File doesn't exist or is invalid JSON — start fresh.
-  }
-
-  const alreadyConfigured =
-    "zai-web-search-prime" in existing && "zai-web-reader" in existing;
-  if (alreadyConfigured) {
-    vscode.window.showInformationMessage(
-      "Z.AI: MCP servers are already configured in mcp.json. Reload VS Code to pick up changes.",
-    );
-    return;
-  }
-
-  const next = {
-    ...existing,
-    "zai-web-search-prime": {
-      type: "http",
-      url: MCP_WEB_SEARCH_URL,
-      headers: { Authorization: `Bearer ${apiKey}` },
-    },
-    "zai-web-reader": {
-      type: "http",
-      url: MCP_WEB_READER_URL,
-      headers: { Authorization: `Bearer ${apiKey}` },
-    },
-  };
-
-  const payload = JSON.stringify({ servers: next }, null, 2);
-  try {
-    await vscode.workspace.fs.createDirectory(
-      vscode.Uri.joinPath(configPath, ".."),
-    );
-  } catch {
-    // Directory may already exist.
-  }
-  await vscode.workspace.fs.writeFile(
-    configPath,
-    new Uint8Array(Buffer.from(payload, "utf8")),
-  );
-
-  outputChannel.appendLine(
-    `[${new Date().toISOString()}] [setup] wrote MCP config to ${configPath.fsPath}`,
-  );
-
-  const choice = await vscode.window.showInformationMessage(
-    `Z.AI: MCP config written to ${configPath.fsPath}. Reload VS Code to enable.`,
-    "Reload",
-  );
-  if (choice === "Reload") {
-    vscode.commands.executeCommand("workbench.action.reloadWindow");
-  }
-}
-
-/**
- * Resolve the absolute path to the user's `mcp.json` file.
- */
-async function resolveMcpJsonUri(): Promise<vscode.Uri | undefined> {
-  const appName = vscode.env.appName;
-  const candidates: string[] = [];
-  if (process.platform === "darwin") {
-    const home = process.env.HOME ?? "";
-    if (appName.toLowerCase().includes("insiders")) {
-      candidates.push(`${home}/Library/Application Support/Code - Insiders/User/mcp.json`);
-    }
-    candidates.push(`${home}/Library/Application Support/Code/User/mcp.json`);
-  } else if (process.platform === "win32") {
-    const appData = process.env.APPDATA ?? "";
-    if (appName.toLowerCase().includes("insiders")) {
-      candidates.push(`${appData}\\Code - Insiders\\User\\mcp.json`);
-    }
-    candidates.push(`${appData}\\Code\\User\\mcp.json`);
-  } else {
-    const home = process.env.HOME ?? "";
-    if (appName.toLowerCase().includes("insiders")) {
-      candidates.push(`${home}/.config/Code - Insiders/User/mcp.json`);
-    }
-    candidates.push(`${home}/.config/Code/User/mcp.json`);
-  }
-  for (const p of candidates) {
-    const dir = vscode.Uri.file(p.replace(/[\\/]mcp\.json$/, ""));
-    try {
-      await vscode.workspace.fs.stat(dir);
-      return vscode.Uri.file(p);
-    } catch {
-      return vscode.Uri.file(p);
-    }
-  }
-  return undefined;
 }
