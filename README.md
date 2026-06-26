@@ -116,18 +116,18 @@ Examples:
 
 ### First-time setup
 
-The MCP servers are **not** registered as a VS Code definition provider (that would surface them as `@<server-label>` mentions in the chat picker and add noise). Instead, run the setup command once to write the MCP configuration to your user `mcp.json`:
+**No MCP setup required.** The `@z-research` participant calls the Z.AI MCP HTTP endpoints directly via `fetch()`. The tools are **not registered** with VS Code's MCP infrastructure — they are completely invisible to Copilot Agent and other chat participants. This prevents Copilot Agent from auto-discovering and invoking the tools during regular chat (which caused stuck sessions in earlier versions).
+
+The only prerequisite:
 
 1. Open the Command Palette and run **Z.AI: Set API Key** (if you haven't already).
-2. Open the Command Palette and run **Z.AI: Setup MCP Servers**. This writes the Web Search and Web Reader servers to `~/Library/Application Support/Code/User/mcp.json` (macOS), `%APPDATA%\Code\User\mcp.json` (Windows), or `~/.config/Code/User/mcp.json` (Linux).
-3. Click **Reload** in the prompt to restart VS Code.
-4. Once reloaded, the MCP tools (`webSearchPrime`, `webReader`) become available to `@z-research`.
+2. Type `@z-research <topic>` in Copilot Chat.
 
-The participant will display a clear error if the MCP tools are not yet connected.
+The participant will display a clear error if the API key is not set.
 
 The final response is a markdown report with inline `[n]` citations and a clickable **Sources** list.
 
-> **📚 Implementation history** — see [`doc/deep-research-journey.md`](./doc/deep-research-journey.md) for the complete build log: 5 initial phases, 3 production-driven polish phases, 22 production bugs with root-cause analysis, 15 lessons learned, and the final architecture.
+> **📚 Implementation history** — see [`doc/deep-research-journey.md`](./doc/deep-research-journey.md) for the complete build log: 9 phases, 28 production bugs with root-cause analysis, 18 lessons learned, and the final architecture.
 
 ---
 
@@ -168,7 +168,6 @@ For advanced usage, you can also run these commands via the Command Palette (`Cm
 |---|---|
 | `Z.AI: Manage Provider` | Manage API key, refresh models, or test connection |
 | `Z.AI: Set API Key` | Store or update your Z.AI API key |
-| `Z.AI: Setup MCP Servers` | Write the user's `mcp.json` with Z.AI Web Search + Web Reader (one-time, for `@z-research`) |
 | `Z.AI: Show Quota` | Open a detailed markdown report of all quota windows |
 | `Z.AI: Toggle Quota View` | Switch the status bar between 5-hour and weekly display |
 | `Z.AI: Diagnostics` | Show a markdown report of all registered Z.AI models |
@@ -255,16 +254,14 @@ If the picker still misbehaves:
 - Check **Output → Z.AI** for any error logs from the model provider.
 - File an issue with the console error and your VS Code version.
 
-### "@z-research: MCP servers are not connected yet"
+### "@z-research: Z.AI API key is not set"
 
-The `@z-research` participant needs Z.AI's Web Search + Web Reader MCP servers registered with VS Code. To fix:
+The `@z-research` participant calls the Z.AI MCP HTTP endpoints directly. It needs your Z.AI API key to authenticate.
 
-1. **Run setup once**: open the Command Palette and run **Z.AI: Setup MCP Servers**. This writes the servers to your user `mcp.json` (macOS: `~/Library/Application Support/Code/User/mcp.json`, Windows: `%APPDATA%\Code\User\mcp.json`, Linux: `~/.config/Code/User/mcp.json`).
-2. **Click Reload** in the prompt to restart VS Code.
-3. **Verify in the MCP view** (Activity Bar → MCP). Both `zai-web-search-prime` and `zai-web-reader` should show as **Running**.
-4. **Re-run** `@z-research <topic>`.
+1. Run **Z.AI: Set API Key** from the Command Palette.
+2. Re-run `@z-research <topic>`.
 
-The participant will display a clear error with the currently-available tool names if MCP isn't connected yet.
+> **Note:** In v0.3.0, a `Z.AI: Setup MCP Servers` command was used to write `mcp.json`. This command has been removed in v0.3.1 — the extension now calls the Z.AI MCP endpoints directly via HTTP. If you have `zai-web-search-prime` or `zai-web-reader` entries in your `mcp.json`, you can safely remove them; they are no longer needed.
 
 ### "@z-research: No usable sources were found"
 
