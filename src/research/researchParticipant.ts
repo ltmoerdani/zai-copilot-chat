@@ -128,21 +128,11 @@ export function registerResearchParticipant(deps: ParticipantDeps): vscode.ChatP
         return;
       }
 
-      // Render synthesis.
+      // Render synthesis. The reduce step already produces a "## Sources"
+      // section at the end with `[n]` citations and clickable URLs, so
+      // we do NOT append a second sources list here (that would duplicate
+      // every source).
       stream.markdown(result.synthesis);
-
-      // Render sources as clickable anchors.
-      if (result.citations.length > 0) {
-        stream.markdown("\n\n### Sources\n");
-        for (const cite of result.citations) {
-          try {
-            stream.anchor(vscode.Uri.parse(cite.url), cite.title);
-            stream.markdown("\n");
-          } catch {
-            stream.markdown(`- [${cite.title}](${cite.url})\n`);
-          }
-        }
-      }
 
       stream.markdown(
         `\n\n_Stats: ${result.stats.queriesRun} queries · ${result.stats.urlsConsidered} URLs considered · ${result.stats.sourcesRead} sources read · ${result.stats.iterations} iterations · ${(result.stats.durationMs / 1000).toFixed(1)}s_`,

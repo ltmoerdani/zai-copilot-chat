@@ -7,12 +7,18 @@ All notable changes to the **Z.AI Copilot Chat** extension are documented here.
 ### Added
 - **Deep research via `@z-research` chat participant** — orchestrates Z.AI's MCP Web Search and Web Reader tools across multiple iterations to produce cited research reports with hundreds of sources, far beyond Copilot's 2-3 link limit.
 - **5-phase orchestrator** — plan queries → parallel search → read top URLs → rank by BM25+recency → map-reduce synthesize with inline `[n]` citations.
+- **Real-time progress reporting** — `parallelSearch` is an async generator that yields a phase per completed query, so the chat shows progress as each search finishes instead of one big batch update.
 - **`Z.AI: Setup MCP Servers` command** — one-time setup that writes the user's `mcp.json` with Z.AI's official Web Search + Web Reader Streamable HTTP servers. No more dropdown noise from auto-registered MCP servers.
 - **Quick / Deep mode** — keyword-based mode detection (`deep`, `thorough`, `comprehensive`, `lengkap`, `menyeluruh` trigger deep mode). Deep mode = up to 100 sources, 5 iterations. Quick mode = ~20 sources, 1-2 iterations.
 - **Two-tier caching** — in-memory + persistent workspace cache for search results and read content. TTL configurable via `zai.research.cacheTTL`.
 - **Retry with exponential backoff for rate limits** — automatic retry on Z.AI MCP -429 (`Rate limit reached`), with 1s/2s/4s backoff (max 2 retries per call).
-- **Pure modules for unit testing** — `mcpToolNameResolver`, `mcpResponseParser`, `mcpInputBuilders`, `mcpRateLimit`, `ranker`, `budget`, `cache` are all `vscode`-free and unit-tested.
-- **51 unit tests** — covering BM25 ranking, budget guards, caching, fuzzy MCP tool name resolution, MCP envelope unwrapping, double-encoded JSON parsing, rate limit detection, and input field name contracts.
+- **Per-call timeout** — `withTimeout()` wrapper around `vscode.lm.invokeTool` (30s default). Failed calls return `[]` (search) or stub (read) so a hung query never blocks the whole run.
+- **Junk URL filter** — `isJunkUrl()` drops obvious junk patterns (Instagram / TikTok / YouTube / Facebook, asset CDNs, "how to host" guides, regional selection pages) at the candidate stage. Saves up to 30s per junk URL.
+- **URL dedup in candidates** — same URL across multiple queries is collapsed via `normalizeUrlForDedupe()` before `webRead` is called.
+- **Top-K source cap for synthesis** — only the top 25 most-relevant sources are sent to the synthesis LLM, not all read sources. Bounded chunk count → bounded chunk-summary LLM calls.
+- **Quality-first planning & expand prompts** — planner LLM is given criteria for "what makes a good query" (concrete entities, action-oriented, varied phrasings, 3-8 keyword sweet spot) and **gap-analysis context** (top-20 results from previous round) for expansion queries. Generic for all topics, not overfit to any domain.
+- **Pure modules for unit testing** — 9 `vscode`-free modules: `mcpToolNameResolver`, `mcpResponseParser`, `mcpInputBuilders`, `mcpRateLimit`, `mcpTimeout`, `junkUrlFilter`, `ranker`, `budget`, `cache`.
+- **75 unit tests** — covering BM25 ranking, budget guards, caching, fuzzy MCP tool name resolution, MCP envelope unwrapping, double-encoded JSON parsing, rate limit detection, per-call timeout, input field name contracts, URL dedup, and junk URL filtering.
 
 ### Settings
 - `zai.research.maxSources` (default `100`) — max sources in deep mode
@@ -31,12 +37,21 @@ All notable changes to the **Z.AI Copilot Chat** extension are documented here.
 - **"MCP not connected" with tools visible** — VS Code exposes MCP tools as `mcp_<server-truncated>_<toolname>` (e.g. `mcp_mcp-web-searc_web_search_prime`), not bare names. New fuzzy name resolver (3 strategies: exact → last-segment with snake/camel conversion → substring).
 - **Participant disappeared from `@z` autocomplete** — VS Code chat picker matches on `name`, not `id`. Renamed `research` → `z-research` (kebab-case starting with `z`).
 - **Dropdown noise from MCP definition provider** — registering `mcpServerDefinitionProviders` added 4 picker entries. Removed in favor of one-time `zai.setupMcp` command for a single clean `@z-research` entry.
+- **"Stuck chat" on hung MCP call** — `vscode.lm.invokeTool` doesn't support `AbortSignal`, so wrapped each call in `withTimeout(thenable, 30s)`. Failed calls return `[]` so the orchestrator continues.
+- **40+ LLM calls per research run** — chunk size 8K was too small (25 chunks for 100 sources). Increased to 16K (halves chunk count) and added a top-25 source cap for synthesis. ~60% fewer LLM calls per run.
+- **Duplicate sources list in output** — the synthesis LLM already produces a `## Sources` section; the participant handler was appending a second `### Sources` list. Removed the duplicate.
+- **Junk URLs wasting 30s timeouts** — Instagram / TikTok / YouTube / asset CDNs / "how to host" guides filtered at the candidate stage before `webRead` is called.
 
 ### Removed
 - **`zai_webSearch` / `zai_webRead` Language Model Tools** — built in Phase 1, then deleted. The hybrid A+B (tools + participant) approach added picker noise for marginal benefit. Single chat participant UX is cleaner.
 - **`zaiApiClient.ts`** — REST API client for Z.AI's `/api/paas/v4/tools/web_search` endpoint. The endpoint doesn't exist for Coding Plan users; we use MCP instead.
 
-> **See [`doc/deep-research-journey.md`](./doc/deep-research-journey.md) for the full build log** — phases, rolled-back approaches, 10 production bugs with root-cause analysis, and lessons learned for future maintainers.
+### Performance (real user runs, 3 iterations)
+- **Initial run:** 8 queries · 30 URLs · 11 sources · 1 iteration · 217s
+- **Optimized run:** 15 queries · 129 URLs · 25 sources · 2 iterations · 250s (~10× more sources than the built-in Copilot web search)
+- **Final (with all optimizations):** 13 queries · 110 URLs · 25 sources · 2 iterations · 214s
+
+> **See [`doc/deep-research-journey.md`](./doc/deep-research-journey.md) for the full build log** — phases, rolled-back approaches, 22 production bugs with root-cause analysis, and lessons learned for future maintainers.
 
 ## 0.2.5 — 2026-06-24
 

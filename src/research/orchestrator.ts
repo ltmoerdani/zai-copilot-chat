@@ -23,7 +23,9 @@ import * as vscode from "vscode";
 import pLimit from "p-limit";
 
 import { BudgetManager, estimateTokens } from "./budget";
+import { isJunkUrl } from "./junkUrlFilter";
 import { Ranker } from "./ranker";
+import { normalizeUrlForDedupe } from "./ranker";
 import { ResearchCache } from "./cache";
 import { McpToolInvoker } from "./mcpTools";
 import type {
@@ -35,10 +37,13 @@ import type {
 } from "./types";
 
 /** Default per-chunk size for map-reduce summarisation (in chars). */
-const CHUNK_CHAR_TARGET = 8_000;
+const CHUNK_CHAR_TARGET = 16_000;
 
 /** Max search results to request per query (API cap). */
 const RESULTS_PER_QUERY = 15;
+
+/** Max sources to feed into the synthesis phase, after ranker top-K. */
+const SYNTHESIS_SOURCE_CAP = 25;
 
 /**
  * Minimal LLM interface the orchestrator needs. The participant handler
@@ -139,16 +144,25 @@ export class ResearchOrchestrator {
       );
       yield { kind: "rank", kept, dropped };
 
-      // Plan the next expansion using the current top sources as context.
+      // Plan the next expansion. Pass the search hits from this round
+      // so the planner can spot gaps (covered topics, time periods,
+      // source types) rather than blindly re-rolling queries.
       if (this.budget.exhausted() || !this.budget.canFetchMore()) break;
-      activeQueries = await this.expandQueries(llm, topic, signal);
+      activeQueries = await this.expandQueries(llm, topic, searchHits!, signal);
     }
 
     // --------------------------------------------------------------
     // Phase 6: synthesise
     // --------------------------------------------------------------
-    const sources = this.ranker.topK();
-    yield { kind: "synthesize", chunks: Math.max(1, Math.ceil(this.totalChars(sources) / CHUNK_CHAR_TARGET)) };
+    // Cap the sources passed to synthesis. Top-K by relevance keeps the
+    // chunk count bounded (e.g. 25 sources × 2K = 50K → 3-4 chunks,
+    // 3-4 LLM summary calls + 1 reduce = ~5 calls instead of 30+).
+    const allSources = this.ranker.topK();
+    const sources = allSources.slice(0, SYNTHESIS_SOURCE_CAP);
+    yield {
+      kind: "synthesize",
+      chunks: Math.max(1, Math.ceil(this.totalChars(sources) / CHUNK_CHAR_TARGET)),
+    };
 
     const { synthesis, citations } = await this.synthesize(llm, topic, sources, signal);
 
@@ -177,7 +191,13 @@ export class ResearchOrchestrator {
     signal?: AbortSignal,
   ): Promise<string[]> {
     const system =
-      "You are a research planner. Given a topic, produce a JSON array of 5-10 diverse web search queries that together would give comprehensive coverage. Vary phrasings, include recent-year qualifiers, and cover sub-topics. Return ONLY the JSON array, no prose.";
+      "You are a research planner. Produce a JSON array of 6-10 high-quality web search queries that would together give comprehensive coverage of the topic.\n" +
+      "\nWhat makes a good query:\n" +
+      "- Concrete and specific. Include named entities, products, services, regions, time periods, or domain terms that a domain expert would use.\n" +
+      "- Action-oriented. The user wants to either *do* something (find steps, tools, procedures) or *understand* something (concepts, comparisons, history). Each query should target one of those intents.\n" +
+      "- Varied across 3-4 dimensions: (a) phrasings — question form ('how to X'), keyword form ('X process steps'), quoted phrases ('\"X Y\"'); (b) angles — overview, step-by-step, comparison, recent updates, official documentation; (c) sources — official sites, expert blogs, forums, academic, news.\n" +
+      "- Effective for search engines. Avoid natural-language sentences; aim for the 3-8 keyword sweet spot. Don't stuff synonyms.\n" +
+      "\nReturn ONLY the JSON array (no prose, no explanation).";
     const user = `Topic: ${topic}\n\nReturn a JSON array of search query strings.`;
     const raw = await llm.complete(system, user, signal);
     return this.parseQueryList(raw, 10);
@@ -186,12 +206,40 @@ export class ResearchOrchestrator {
   private async expandQueries(
     llm: ResearchLLM,
     topic: string,
+    searchHits: Map<string, { title: string; url: string; snippet: string }[]>,
     signal?: AbortSignal,
   ): Promise<string[]> {
     const seen = Array.from(this.queriesRun).slice(-15).map((q) => `- ${q}`).join("\n");
+
+    // Build a short summary of what the previous queries surfaced so the
+    // LLM can target gaps instead of re-querying the same ground. We list
+    // the top URLs + title only (truncate to keep the prompt small).
+    const topHits: { title: string; url: string }[] = [];
+    for (const [, hits] of searchHits) {
+      for (const h of hits.slice(0, 3)) {
+        topHits.push({ title: h.title.slice(0, 80), url: h.url.slice(0, 80) });
+        if (topHits.length >= 20) break;
+      }
+      if (topHits.length >= 20) break;
+    }
+    const hitsSummary = topHits
+      .map((h, i) => `${i + 1}. ${h.title} (${h.url})`)
+      .join("\n");
+
     const system =
-      "You are a research planner expanding coverage. Produce a JSON array of 3-5 NEW web search queries that explore facets of the topic NOT already covered by the queries already run. Return ONLY the JSON array.";
-    const user = `Topic: ${topic}\n\nAlready-run queries:\n${seen}\n\nReturn a JSON array of NEW search query strings.`;
+      "You are a research planner. The previous queries have been run and the top results are listed below. " +
+      "Your job: produce 3-5 NEW search queries that target **gaps** the previous round did not cover.\n" +
+      "\nGap-finding guidance:\n" +
+      "- Read the result titles/URLs and identify what sub-topics, angles, sources, or time periods are MISSING.\n" +
+      "- Don't re-query topics already well-covered (don't repeat the same phrasings).\n" +
+      "- Consider: official documentation vs community discussions, recent vs historical, overview vs deep-dive, different sub-questions, different stakeholders, different regions or contexts.\n" +
+      "- Keep queries concrete and search-engine friendly (3-8 keywords, include specific entities from the topic).\n" +
+      "\nReturn ONLY the JSON array of new queries (no prose).";
+    const user =
+      `Topic: ${topic}\n\n` +
+      `Already-run queries:\n${seen}\n\n` +
+      `Top results returned so far:\n${hitsSummary || "(none yet)"}\n\n` +
+      `What sub-topics or angles are missing? Return a JSON array of 3-5 new queries that fill those gaps.`;
     const raw = await llm.complete(system, user, signal);
     return this.parseQueryList(raw, 5);
   }
@@ -303,16 +351,34 @@ export class ResearchOrchestrator {
     return out;
   }
 
-  /** Flatten search hits into candidate URLs with the originating query. */
+  /** Flatten search hits into candidate URLs with the originating query.
+   * Deduplicates by normalized URL across queries so we don't read the
+   * same article twice (e.g. worldarchery.sport homepage appears in
+   * many search results). Keeps the first occurrence's snippet+query.
+   *
+   * Also filters out obvious junk URLs (social media reels, site
+   * homepages, video pages) that are very unlikely to contain
+   * registration-procedure text. These usually return 30s timeouts
+   * with empty content. The user-visible stat still includes them in
+   * `urlsConsidered` so the budget is honest, but they're not in the
+   * candidate list and so don't trigger webRead. */
   private collectCandidates(
     queries: string[],
     hits: Map<string, { url: string; title: string; snippet: string }[]>,
   ): Array<{ url: string; title: string; snippet: string; query: string }> {
     const out: Array<{ url: string; title: string; snippet: string; query: string }> = [];
+    const seen = new Set<string>();
     for (const q of queries) {
       const list = hits.get(q) ?? [];
       for (const r of list) {
         this.urlsConsidered++;
+        if (isJunkUrl(r.url)) {
+          this.deps.log?.(`collectCandidates: skipping junk URL ${r.url}`);
+          continue;
+        }
+        const key = normalizeUrlForDedupe(r.url);
+        if (seen.has(key)) continue;
+        seen.add(key);
         out.push({ url: r.url, title: r.title, snippet: r.snippet, query: q });
       }
     }
@@ -343,8 +409,13 @@ export class ResearchOrchestrator {
             title: c.title,
             snippet: c.snippet,
           });
+          // Hard skip: the snippet scores 0 (no term overlap at all) AND
+          // we already have at least 5 candidates. Most junk URLs land
+          // here — saves a 30s webRead timeout.
           if (snippetScore === 0 && this.budget.snapshot().sourcesFetched > 5) {
-            // Low signal — skip the read unless we're still warming up.
+            this.deps.log?.(
+              `readAndRank: skipping "${c.title}" (url=${c.url}) — snippet score 0`,
+            );
             return;
           }
 
@@ -426,12 +497,18 @@ export class ResearchOrchestrator {
       .join("\n");
 
     const reduceSystem =
-      "You are a research synthesizer. Using the provided chunk summaries and citation table, write a comprehensive, well-structured markdown report on the topic. Cite sources inline using [n] notation matching the citation table. Be concrete and factual; do not invent facts. End with a '## Sources' section listing the citations.";
+      "You are a research synthesizer. Using the provided chunk summaries and citation table, write a comprehensive, well-structured markdown report on the topic. " +
+      "\n\nCritical rules:\n" +
+      "- Maximise what the sources DO cover. If a source discusses a related but different aspect (e.g. it documents a process from one perspective but not the user's specific angle), include that and explicitly note the perspective gap. Don't dismiss usable information just because it's not a perfect match.\n" +
+      "- When multiple relevant angles are present in the sources, present them as separate sections so the reader can see the full picture.\n" +
+      "- Cite sources inline using [n] notation matching the citation table.\n" +
+      "- Be concrete and factual; do not invent facts. If a sub-question is genuinely unanswered by the sources, say so briefly and move on.\n" +
+      "- End with a '## Sources' section listing the citations.";
     const reduceUser =
       `Topic: ${topic}\n\n` +
       `Chunk summaries:\n${chunkSummaries.map((s, i) => `### Chunk ${i + 1}\n${s}`).join("\n\n")}\n\n` +
       `Citation table:\n${citationTable}\n\n` +
-      `Write the final synthesis now.`;
+      `Write the final synthesis, drawing on every relevant angle in the sources.`;
 
     const synthesis = await llm.complete(reduceSystem, reduceUser, signal);
     this.budget.consumeTokens(estimateTokens(synthesis));
