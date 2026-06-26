@@ -180,12 +180,6 @@
         }
       }
     },
-    "mcpServerDefinitionProviders": [
-      {
-        "id": "zai.mcpProvider",
-        "label": "Z.AI MCP Servers"
-      }
-    ],
     "chatParticipants": [
       {
         "id": "zai.research",

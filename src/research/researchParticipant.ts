@@ -82,22 +82,12 @@ export function registerResearchParticipant(deps: ParticipantDeps): vscode.ChatP
       );
 
       // Pre-flight: MCP tools must be connected before we can run research.
-      // This surfaces a clear error if the user hasn't run the setup command
-      // or VS Code hasn't yet connected to the MCP servers from mcp.json.
-      if (!mcpTools.isReady()) {
-        const available = mcpTools.listAvailableTools();
-        const zaiTools = available.filter((n) => n.toLowerCase().includes("zai") || n.toLowerCase().includes("web"));
-        const toolList = zaiTools.length > 0 ? zaiTools.join(", ") : "(no zai tools found)";
+      // Check if API key is set (MCP tools call Z.AI HTTP endpoints directly).
+      if (!(await mcpTools.isReady())) {
         stream.markdown(
-          "⚠️ **Z.AI MCP servers are not connected yet.**\n\n" +
-            "1. Make sure **Z.AI: Setup MCP Servers** has been run and you've reloaded the window.\n" +
-            "2. Open the **MCP** view (Activity Bar → MCP) and start the `zai-web-search-prime` " +
-            "and `zai-web-reader` servers.\n" +
-            "3. If the servers are listed but stopped, click ▶ to start them. They must be " +
-            "in the **Running** state for the tools to become available.\n\n" +
-            `**Debug — currently available Z.AI tools:** \`${toolList}\`\n\n` +
-            `**Debug — total tools visible to extension:** ${available.length}\n\n` +
-            `Re-run \`@z-research ${topic}\` after starting the servers.`,
+          "⚠️ **Z.AI API key is not set.**\n\n" +
+            "Run **Z.AI: Set API Key** from the Command Palette to configure your key, " +
+            "then re-run `@z-research`.",
         );
         return;
       }
