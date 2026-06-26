@@ -12,8 +12,8 @@
 import * as vscode from "vscode";
 
 import { ResearchCache } from "./cache";
+import { McpToolInvoker } from "./mcpTools";
 import { ResearchOrchestrator, type ResearchLLM } from "./orchestrator";
-import { ZaiApiClient } from "./zaiApiClient";
 import {
   MissingApiKeyError,
   ZaiApiError,
@@ -36,7 +36,7 @@ const DEFAULT_SYNTHESIS_MODEL = "glm-5.2";
 
 export interface ParticipantDeps {
   context: vscode.ExtensionContext;
-  client: ZaiApiClient;
+  mcpTools: McpToolInvoker;
   outputChannel: vscode.OutputChannel;
 }
 
@@ -45,11 +45,13 @@ export interface ParticipantDeps {
  * pushed onto the extension context by the caller.
  */
 export function registerResearchParticipant(deps: ParticipantDeps): vscode.ChatParticipant {
-  const { context, client, outputChannel } = deps;
+  const { context, mcpTools, outputChannel } = deps;
 
   const participant = vscode.chat.createChatParticipant(
     RESEARCH_PARTICIPANT_ID,
     async (request, _ctx, stream, token) => {
+      // Forward the chat request's tool invocation token to MCP calls so
+      // VS Code treats them as user-authorised (no confirmation modal).
       const topic = request.prompt.trim();
       if (!topic) {
         stream.markdown(
@@ -58,8 +60,8 @@ export function registerResearchParticipant(deps: ParticipantDeps): vscode.ChatP
         return;
       }
 
-      // Resolve config (mode from slash command + user settings).
-      const config = resolveConfig(request.command);
+      // Resolve config (mode from keyword in prompt + user settings).
+      const config = resolveConfig(topic);
 
       // Build an AbortController linked to VS Code's cancellation token so a
       // user "Stop" aborts in-flight LLM calls.
@@ -79,13 +81,36 @@ export function registerResearchParticipant(deps: ParticipantDeps): vscode.ChatP
         outputChannel,
       );
 
+      // Pre-flight: MCP tools must be connected before we can run research.
+      // This surfaces a clear error if the user hasn't run the setup command
+      // or VS Code hasn't yet connected to the MCP servers from mcp.json.
+      if (!mcpTools.isReady()) {
+        const available = mcpTools.listAvailableTools();
+        const zaiTools = available.filter((n) => n.toLowerCase().includes("zai") || n.toLowerCase().includes("web"));
+        const toolList = zaiTools.length > 0 ? zaiTools.join(", ") : "(no zai tools found)";
+        stream.markdown(
+          "⚠️ **Z.AI MCP servers are not connected yet.**\n\n" +
+            "1. Make sure **Z.AI: Setup MCP Servers** has been run and you've reloaded the window.\n" +
+            "2. Open the **MCP** view (Activity Bar → MCP) and start the `zai-web-search-prime` " +
+            "and `zai-web-reader` servers.\n" +
+            "3. If the servers are listed but stopped, click ▶ to start them. They must be " +
+            "in the **Running** state for the tools to become available.\n\n" +
+            `**Debug — currently available Z.AI tools:** \`${toolList}\`\n\n` +
+            `**Debug — total tools visible to extension:** ${available.length}\n\n` +
+            `Re-run \`@z-research ${topic}\` after starting the servers.`,
+        );
+        return;
+      }
+
       const orchestrator = new ResearchOrchestrator({
-        client,
+        mcpTools,
         llm,
         cache,
         config,
         topic,
         signal: controller.signal,
+        toolInvocationToken: request.toolInvocationToken,
+        log: (msg) => outputChannel.appendLine(`[${new Date().toISOString()}] [orchestrator] ${msg}`),
       });
 
       stream.progress(`Planning research queries for "${topic}"…`);
@@ -150,17 +175,23 @@ async function consumeOrchestrator(
   }
 }
 
-/** Map slash command → concrete {@link ResearchConfig}. */
-function resolveConfig(command: string | undefined): ResearchConfig {
+/** Map user prompt → concrete {@link ResearchConfig}. */
+function resolveConfig(prompt: string): ResearchConfig {
   const cfg = vscode.workspace.getConfiguration("zai.research");
-  const isDeep = command === "deep";
-  const isQuick = command === "quick";
+  const lower = prompt.toLowerCase();
+
+  // Keyword-based mode detection. Slash commands were removed in favour of
+  // a single clean chat-surface entry point; users can still opt into deep
+  // mode with natural language cues.
+  const isDeep =
+    lower.startsWith("/deep") ||
+    /\b(deep|thorough|comprehensive|exhaustive|menyeluruh|lengkap)\b/.test(lower);
 
   return {
     mode: isDeep ? "deep" : "quick",
     maxSources: cfg.get("maxSources", isDeep ? 100 : 20),
     maxIterations: cfg.get("maxIterations", isDeep ? 5 : 2),
-    concurrency: cfg.get("concurrency", 10),
+    concurrency: cfg.get("concurrency", 3),
     cacheTtlSeconds: cfg.get("cacheTTL", 3600),
     synthesisModel: cfg.get("synthesisModel", DEFAULT_SYNTHESIS_MODEL),
   };

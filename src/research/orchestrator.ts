@@ -5,9 +5,9 @@
  *   1. Plan: ask the synthesis model for N diverse search queries from the
  *      user's topic.
  *   2. Search: run queries in parallel (bounded by `concurrency`), via
- *      {@link ZaiApiClient.webSearch}.
+ *      {@link McpToolInvoker.webSearch} (Coding Plan MCP quota).
  *   3. Read: fetch full content of the most relevant URLs via
- *      {@link ZaiApiClient.webRead}, with two-tier caching.
+ *      {@link McpToolInvoker.webRead}, with two-tier caching.
  *   4. Rank: dedupe + score against the topic, keep top-K.
  *   5. Loop: if budget remains and coverage is thin, expand with follow-up
  *      queries derived from the gaps in what we have.
@@ -18,12 +18,14 @@
  * stream directly. The participant handler renders progress + final result.
  */
 
+import * as vscode from "vscode";
+
 import pLimit from "p-limit";
 
 import { BudgetManager, estimateTokens } from "./budget";
 import { Ranker } from "./ranker";
 import { ResearchCache } from "./cache";
-import { ZaiApiClient } from "./zaiApiClient";
+import { McpToolInvoker } from "./mcpTools";
 import type {
   Citation,
   ResearchConfig,
@@ -55,13 +57,22 @@ export interface ResearchLLM {
 }
 
 export interface OrchestratorDeps {
-  client: ZaiApiClient;
+  /** MCP tool invoker for web search / read (Coding Plan quota). */
+  mcpTools: McpToolInvoker;
   llm: ResearchLLM;
   cache: ResearchCache;
   config: ResearchConfig;
   topic: string;
   /** AbortSignal wired to the chat request cancellation token. */
   signal?: AbortSignal;
+  /**
+   * Optional `ChatParticipantToolToken` from the originating chat request.
+   * Forwarded to MCP tool invocations so VS Code treats them as
+   * user-authorised and skips the confirmation modal.
+   */
+  toolInvocationToken?: vscode.ChatParticipantToolToken;
+  /** Optional diagnostic logger (typically the Z.AI Research output channel). */
+  log?: (message: string) => void;
 }
 
 export class ResearchOrchestrator {
@@ -88,7 +99,7 @@ export class ResearchOrchestrator {
    */
   async *run(): AsyncGenerator<ResearchPhase, ResearchResult, unknown> {
     const startedAt = Date.now();
-    const { client, llm, cache, config, topic, signal } = this.deps;
+    const { mcpTools, llm, cache, config, topic, signal, toolInvocationToken } = this.deps;
 
     // --------------------------------------------------------------
     // Phase 1: plan
@@ -103,13 +114,29 @@ export class ResearchOrchestrator {
     while (!this.budget.exhausted() && activeQueries.length > 0) {
       this.budget.consumeIteration();
 
-      const searchHits = await this.parallelSearch(activeQueries);
-      yield* this.emitSearchPhases(activeQueries, searchHits);
+      // parallelSearch is a generator that yields a "search" phase for
+      // each query as it completes, giving the user real-time progress
+      // (instead of one big batch update at the end).
+      const searchGen = this.parallelSearch(activeQueries, toolInvocationToken);
+      let searchHits: Map<string, Awaited<ReturnType<McpToolInvoker["webSearch"]>>> | undefined;
+      while (true) {
+        const step = await searchGen.next();
+        if (step.done) {
+          searchHits = step.value;
+          break;
+        }
+        yield step.value;
+      }
 
-      const candidates = this.collectCandidates(activeQueries, searchHits);
+      const candidates = this.collectCandidates(activeQueries, searchHits!);
       if (candidates.length === 0) break;
 
-      const { kept, dropped } = await this.readAndRank(candidates, client, cache);
+      const { kept, dropped } = await this.readAndRank(
+        candidates,
+        mcpTools,
+        cache,
+        toolInvocationToken,
+      );
       yield { kind: "rank", kept, dropped };
 
       // Plan the next expansion using the current top sources as context.
@@ -195,37 +222,84 @@ export class ResearchOrchestrator {
   // ---- search & read ------------------------------------------------------
 
   /**
-   * Run queries in parallel, bounded by `concurrency`. Returns a map of
-   * query → results. Failures are swallowed (logged) so one bad query does
-   * not abort the run.
+   * Run queries in parallel, bounded by `concurrency`. Yields a
+   * `search` phase for each query as it completes (giving the user
+   * real-time progress), then returns the final `query → results` map.
+   *
+   * Failures are swallowed (logged) so one bad query does not abort the
+   * run. A query that times out via `McpToolInvoker.webSearch` returns
+   * an empty result list and the phase is yielded with `resultCount: 0`.
    */
-  private async parallelSearch(
+  private async *parallelSearch(
     queries: string[],
-  ): Promise<Map<string, Awaited<ReturnType<ZaiApiClient["webSearch"]>>>> {
-    const { client, cache, config } = this.deps;
+    token?: vscode.ChatParticipantToolToken,
+  ): AsyncGenerator<
+    ResearchPhase,
+    Map<string, Awaited<ReturnType<McpToolInvoker["webSearch"]>>>,
+    unknown
+  > {
+    const { mcpTools, cache, config } = this.deps;
     const limit = pLimit(config.concurrency);
-    const out = new Map<string, Awaited<ReturnType<ZaiApiClient["webSearch"]>>>();
+    const out = new Map<string, Awaited<ReturnType<McpToolInvoker["webSearch"]>>>();
 
-    await Promise.all(
-      queries.map((q) =>
-        limit(async () => {
-          this.queriesRun.add(q);
-          const cacheKey = `${q}|${RESULTS_PER_QUERY}`;
-          try {
-            const cached = cache.enabled ? await cache.getSearch(cacheKey) : undefined;
-            if (cached) {
-              out.set(q, cached as Awaited<ReturnType<ZaiApiClient["webSearch"]>>);
-              return;
-            }
-            const results = await client.webSearch(q, RESULTS_PER_QUERY);
-            if (cache.enabled) await cache.setSearch(cacheKey, results);
-            out.set(q, results);
-          } catch {
-            // Swallow — we still have other queries.
+    // Event-based completion queue. Each task pushes a {query, results}
+    // entry when done and calls `notify()` to wake the generator loop.
+    // The loop drains the queue one item at a time and yields a phase.
+    interface DoneEvent {
+      query: string;
+      results: Awaited<ReturnType<McpToolInvoker["webSearch"]>>;
+    }
+    const doneQueue: DoneEvent[] = [];
+    let resolveWait: (() => void) | null = null;
+    const notify = (): void => {
+      const r = resolveWait;
+      resolveWait = null;
+      if (r) r();
+    };
+
+    const tasks = queries.map((q) =>
+      limit(async () => {
+        this.queriesRun.add(q);
+        const cacheKey = `${q}|${RESULTS_PER_QUERY}`;
+        try {
+          const cached = cache.enabled
+            ? ((await cache.getSearch(cacheKey)) as
+                | Awaited<ReturnType<McpToolInvoker["webSearch"]>>
+                | undefined)
+            : undefined;
+          if (cached) {
+            doneQueue.push({ query: q, results: cached });
+            notify();
+            return;
           }
-        }),
-      ),
+          const results = await mcpTools.webSearch(q, RESULTS_PER_QUERY, token, 2);
+          if (cache.enabled) await cache.setSearch(cacheKey, results);
+          doneQueue.push({ query: q, results });
+          notify();
+        } catch (error) {
+          // Log and swallow — one failing query should not abort the run,
+          // but silent failures make debugging impossible.
+          const detail = error instanceof Error ? error.message : String(error);
+          this.deps.log?.(`webSearch failed for "${q}": ${detail}`);
+          doneQueue.push({ query: q, results: [] });
+          notify();
+        }
+      }),
     );
+
+    // Drain the queue, yielding per-query progress. If a task is still
+    // in flight when we get here, wait on the resolver.
+    for (let i = 0; i < tasks.length; i++) {
+      if (doneQueue.length === 0) {
+        await new Promise<void>((resolve) => {
+          resolveWait = resolve;
+        });
+      }
+      const event = doneQueue.shift()!;
+      out.set(event.query, event.results);
+      yield { kind: "search", query: event.query, resultCount: event.results.length };
+    }
+
     return out;
   }
 
@@ -251,8 +325,9 @@ export class ResearchOrchestrator {
    */
   private async readAndRank(
     candidates: Array<{ url: string; title: string; snippet: string; query: string }>,
-    client: ZaiApiClient,
+    mcpTools: McpToolInvoker,
     cache: ResearchCache,
+    token?: vscode.ChatParticipantToolToken,
   ): Promise<{ kept: number; dropped: number }> {
     const limit = pLimit(this.deps.config.concurrency);
     const before = this.ranker.size;
@@ -277,7 +352,7 @@ export class ResearchOrchestrator {
             const cachedContent = cache.enabled ? await cache.getRead(c.url) : undefined;
             let content = cachedContent;
             if (!content) {
-              const read = await client.webRead(c.url, "markdown");
+              const read = await mcpTools.webRead(c.url, "markdown", token);
               content = read.content;
               if (cache.enabled) await cache.setRead(c.url, content);
             }
@@ -415,13 +490,4 @@ export class ResearchOrchestrator {
     return `${text.slice(0, Math.max(0, max))}…`;
   }
 
-  private async *emitSearchPhases(
-    queries: string[],
-    hits: Map<string, unknown[]>,
-  ): AsyncGenerator<ResearchPhase> {
-    for (const q of queries) {
-      const list = hits.get(q);
-      yield { kind: "search", query: q, resultCount: list ? list.length : 0 };
-    }
-  }
 }

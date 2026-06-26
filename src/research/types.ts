@@ -43,7 +43,7 @@ export class MissingApiKeyError extends Error {
   }
 }
 
-/** Error thrown when Z.AI tools API returns a non-recoverable HTTP status. */
+/** Error thrown when Z.AI chat API returns a non-recoverable HTTP status. */
 export class ZaiApiError extends Error {
   constructor(
     message: string,

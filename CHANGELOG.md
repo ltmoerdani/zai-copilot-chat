@@ -2,6 +2,42 @@
 
 All notable changes to the **Z.AI Copilot Chat** extension are documented here.
 
+## 0.3.0 — 2026-06-26
+
+### Added
+- **Deep research via `@z-research` chat participant** — orchestrates Z.AI's MCP Web Search and Web Reader tools across multiple iterations to produce cited research reports with hundreds of sources, far beyond Copilot's 2-3 link limit.
+- **5-phase orchestrator** — plan queries → parallel search → read top URLs → rank by BM25+recency → map-reduce synthesize with inline `[n]` citations.
+- **`Z.AI: Setup MCP Servers` command** — one-time setup that writes the user's `mcp.json` with Z.AI's official Web Search + Web Reader Streamable HTTP servers. No more dropdown noise from auto-registered MCP servers.
+- **Quick / Deep mode** — keyword-based mode detection (`deep`, `thorough`, `comprehensive`, `lengkap`, `menyeluruh` trigger deep mode). Deep mode = up to 100 sources, 5 iterations. Quick mode = ~20 sources, 1-2 iterations.
+- **Two-tier caching** — in-memory + persistent workspace cache for search results and read content. TTL configurable via `zai.research.cacheTTL`.
+- **Retry with exponential backoff for rate limits** — automatic retry on Z.AI MCP -429 (`Rate limit reached`), with 1s/2s/4s backoff (max 2 retries per call).
+- **Pure modules for unit testing** — `mcpToolNameResolver`, `mcpResponseParser`, `mcpInputBuilders`, `mcpRateLimit`, `ranker`, `budget`, `cache` are all `vscode`-free and unit-tested.
+- **51 unit tests** — covering BM25 ranking, budget guards, caching, fuzzy MCP tool name resolution, MCP envelope unwrapping, double-encoded JSON parsing, rate limit detection, and input field name contracts.
+
+### Settings
+- `zai.research.maxSources` (default `100`) — max sources in deep mode
+- `zai.research.maxIterations` (default `5`) — max query-expansion iterations
+- `zai.research.concurrency` (default `3`) — parallel MCP calls (safe for rate limit)
+- `zai.research.cacheTTL` (default `3600`) — search/read cache TTL in seconds
+- `zai.research.synthesisModel` (default `glm-5.2`) — LLM for planning + synthesis
+- `zai.research.webSearchToolName` (default `web_search_prime`) — override for VS Code MCP tool name format changes
+- `zai.research.webReaderToolName` (default `webReader`) — override for VS Code MCP tool name format changes
+
+### Fixed (during deep research development)
+- **"search_query cannot be empty" (-400)** — was sending `{ query, count }` instead of `{ search_query, count }`. Extracted `buildWebSearchInput` / `buildWebReadInput` to a pure module with field-name contract tests.
+- **Tool confirmation modal on every call** — was hard-coding `toolInvocationToken: undefined`. Now forwards `request.toolInvocationToken` from the chat request through the orchestrator to `McpToolInvoker`, so VS Code treats calls as user-authorized.
+- **"0 URLs considered" despite successful MCP calls** — Z.AI MCP server double-encodes responses (text field value is a stringified JSON array). New `tryJsonParseDeep()` peels up to 3 layers of stringification.
+- **Rate limit -429 with no recovery** — added `RateLimitError` detection (regex on `MCP error -429` / `Rate limit`) and exponential backoff in `McpToolInvoker.webSearch`. Also reduced default concurrency from 10 to 3.
+- **"MCP not connected" with tools visible** — VS Code exposes MCP tools as `mcp_<server-truncated>_<toolname>` (e.g. `mcp_mcp-web-searc_web_search_prime`), not bare names. New fuzzy name resolver (3 strategies: exact → last-segment with snake/camel conversion → substring).
+- **Participant disappeared from `@z` autocomplete** — VS Code chat picker matches on `name`, not `id`. Renamed `research` → `z-research` (kebab-case starting with `z`).
+- **Dropdown noise from MCP definition provider** — registering `mcpServerDefinitionProviders` added 4 picker entries. Removed in favor of one-time `zai.setupMcp` command for a single clean `@z-research` entry.
+
+### Removed
+- **`zai_webSearch` / `zai_webRead` Language Model Tools** — built in Phase 1, then deleted. The hybrid A+B (tools + participant) approach added picker noise for marginal benefit. Single chat participant UX is cleaner.
+- **`zaiApiClient.ts`** — REST API client for Z.AI's `/api/paas/v4/tools/web_search` endpoint. The endpoint doesn't exist for Coding Plan users; we use MCP instead.
+
+> **See [`doc/deep-research-journey.md`](./doc/deep-research-journey.md) for the full build log** — phases, rolled-back approaches, 10 production bugs with root-cause analysis, and lessons learned for future maintainers.
+
 ## 0.2.5 — 2026-06-24
 
 ### Fixed

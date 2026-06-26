@@ -41,41 +41,45 @@ This lets you pick and use Z.AI GLM models directly from the Copilot Chat model 
 - **Tool-calling support** — forwards tool schemas using OpenAI-compatible chat completions
 - **Reasoning debug** — opt-in `reasoning_content` logging to the Z.AI output channel
 - **Diagnostics command** — one-click markdown report showing exactly which models VS Code has registered
-- **Deep research** — `@zai.research` chat participant + `#zai-search` / `#zai-read` tools that fetch **hundreds of sources** via the Z.AI Web Search + Web Reader APIs, then synthesise a cited report. See [Deep Research](#-deep-research) below.
+- **Deep research** — `@z-research` chat participant that registers Z.AI's MCP Web Search + Web Reader servers and orchestrates them across many iterations to produce cited research reports. See [Deep Research](#-deep-research) below.
 
 ---
 
 ## 🔬 Deep Research
 
-Two complementary ways to give Copilot Chat live internet access — far beyond the 2–3 links the built-in Copilot web search returns.
+The extension registers Z.AI's remote **MCP servers** for Web Search and Web Reader, making them available natively to Copilot Agent. The `@z-research` participant then orchestrates them across many iterations to produce a multi-source, cited research report — far beyond the 2–3 links the built-in Copilot web search returns.
 
-### A. Language Model Tools (single-shot)
+### How it works
 
-Reference them inline with `#` in any chat, or let Copilot Agent mode pick them automatically:
+Z.AI's Web Search and Web Reader are MCP servers (not REST endpoints). They are billed against the **GLM Coding Plan's shared monthly MCP quota**, not the general API balance — so no top-up is needed.
 
-| Tool | Reference | What it does |
+| MCP Server | Tool | Streamable HTTP URL |
 |---|---|---|
-| `zai_webSearch` | `#zai-search` | Search the web via Z.AI Web Search API. Returns up to 20 results (title + URL + snippet). |
-| `zai_webRead`  | `#zai-read`   | Fetch + extract the main content of a single URL as clean markdown via Z.AI Web Reader API. |
+| Z.AI Web Search (Coding Plan) | `webSearchPrime` | `https://api.z.ai/api/mcp/web_search_prime/mcp` |
+| Z.AI Web Reader (Coding Plan) | `webReader` | `https://api.z.ai/api/mcp/web_reader/mcp` |
 
-Example: `#zai-search latest GLM 5.2 benchmarks` → Copilot sees the results and can chain into `#zai-read <url>` for full text.
+| Plan | Monthly MCP quota (Web Search + Web Reader combined) |
+|---|---|
+| Lite | 100 |
+| Pro | 1,000 |
+| Max | 4,000 |
 
-### B. `@zai.research` participant (multi-iteration, hundreds of sources)
+### `@z-research` participant (multi-iteration, hundreds of sources)
 
 For thorough research the participant runs its own loop, bypassing Copilot's per-turn tool-call cap:
 
 1. **Plan** — the synthesis model generates 5–10 diverse search queries from your topic.
-2. **Search** — queries run in parallel (bounded by `zai.research.concurrency`).
-3. **Read** — top URLs are fetched via Z.AI Web Reader with two-tier caching.
+2. **Search** — queries run in parallel (bounded by `zai.research.concurrency`) via the `webSearchPrime` MCP tool.
+3. **Read** — top URLs are fetched via the `webReader` MCP tool with two-tier caching.
 4. **Rank** — sources are deduped and scored (BM25-style term overlap + recency boost).
 5. **Expand** — if budget remains and coverage is thin, new queries are generated from the gaps and the loop repeats.
 6. **Synthesise** — sources are chunked, each chunk is summarised (map), then a final cited report is produced (reduce).
 
 ```mermaid
 flowchart TD
-    U["@zai.research topic"] --> Plan[Plan: 5-10 queries]
-    Plan --> Search[Parallel search]
-    Search --> Read[Parallel webRead + cache]
+    U["@z-research topic"] --> Plan[Plan: 5-10 queries]
+    Plan --> Search[Parallel search via MCP]
+    Search --> Read[Parallel webRead via MCP + cache]
     Read --> Rank[Dedupe + BM25 rank]
     Rank --> Done{Budget ok?}
     Done -- no --> Synth[Map-reduce synthesize + citations]
@@ -84,13 +88,31 @@ flowchart TD
     Synth --> Out[Render report + clickable sources]
 ```
 
-**Commands:**
+**Usage:**
 
-- `@zai.research /quick <topic>` — ~20 sources, 1–2 iterations, ~30s. Cheap and fast.
-- `@zai.research /deep <topic>` — up to 100+ sources, up to 5 iterations. Slower but thorough.
-- `@zai.research <topic>` (no command) — defaults to `/quick`.
+`@z-research <topic>` — single entry point, no slash commands.
+
+- **Default mode (quick):** ~20 sources, 1–2 iterations, ~30s. Cheap and fast.
+- **Deep mode:** include keywords like `deep`, `thorough`, `comprehensive`, `lengkap`, or `menyeluruh` in your prompt → up to 100+ sources, up to 5 iterations. Slower but thorough.
+
+Examples:
+- `@z-research pricing kompetitor SaaS WhatsApp di Indonesia 2026` — quick mode
+- `@z-research deep research complete state of agentic coding tools June 2026` — deep mode
+
+### First-time setup
+
+The MCP servers are **not** registered as a VS Code definition provider (that would surface them as `@<server-label>` mentions in the chat picker and add noise). Instead, run the setup command once to write the MCP configuration to your user `mcp.json`:
+
+1. Open the Command Palette and run **Z.AI: Set API Key** (if you haven't already).
+2. Open the Command Palette and run **Z.AI: Setup MCP Servers**. This writes the Web Search and Web Reader servers to `~/Library/Application Support/Code/User/mcp.json` (macOS), `%APPDATA%\Code\User\mcp.json` (Windows), or `~/.config/Code/User/mcp.json` (Linux).
+3. Click **Reload** in the prompt to restart VS Code.
+4. Once reloaded, the MCP tools (`webSearchPrime`, `webReader`) become available to `@z-research`.
+
+The participant will display a clear error if the MCP tools are not yet connected.
 
 The final response is a markdown report with inline `[n]` citations and a clickable **Sources** list.
+
+> **📚 Implementation history** — see [`doc/deep-research-journey.md`](./doc/deep-research-journey.md) for the complete build log: phases, rolled-back approaches, 10 production bugs with root-cause analysis, and lessons learned.
 
 ---
 
@@ -166,9 +188,9 @@ The quota is fetched from `https://api.z.ai/api/monitor/usage/quota/limit` and a
 | `zai.showQuotaStatusBar` | `boolean` | `true` | Show the Z.AI Coding Plan quota (5-hour / weekly) in the VS Code status bar. Hover for a graphical SVG donut chart; click to toggle between windows. |
 | `zai.quotaRefreshInterval` | `number` | `5` | How often (in minutes) to refresh the Z.AI Coding Plan quota. `0` disables automatic refresh. |
 | `zai.experimentalContextIndicator` | `boolean` | `false` | Experimental: attempt to fill the Copilot Chat context indicator with real Z.AI token usage. Depends on VS Code internals. |
-| `zai.research.maxSources` | `number` | `100` | Max sources fetched during a `@zai.research /deep` run. Lower to reduce cost/latency. |
+| `zai.research.maxSources` | `number` | `100` | Max sources fetched during a `@z-research` run when deep mode is triggered. Lower to reduce cost/latency. |
 | `zai.research.maxIterations` | `number` | `5` | Max query-expansion iterations before synthesis (`1`–`10`). |
-| `zai.research.concurrency` | `number` | `10` | Parallel HTTP requests during search + read phases. Higher is faster but may hit rate limits. |
+| `zai.research.concurrency` | `number` | `3` | Parallel HTTP requests during search + read phases. Higher is faster but may hit the Z.AI MCP rate limit (~3-5 req/s safe). |
 | `zai.research.cacheTTL` | `number` | `3600` | Cache TTL in seconds for Z.AI search + read results. `0` disables caching. |
 | `zai.research.synthesisModel` | `string` | `glm-5.2` | Z.AI model used for planning queries and synthesising the final report. Use a high-context model for deep research. |
 

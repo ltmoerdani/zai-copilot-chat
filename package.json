@@ -61,6 +61,10 @@
       {
         "command": "zai.toggleQuotaView",
         "title": "Z.AI: Toggle Quota View"
+      },
+      {
+        "command": "zai.setupMcp",
+        "title": "Z.AI: Setup MCP Servers"
       }
     ],
     "configuration": {
@@ -142,10 +146,10 @@
         },
         "zai.research.concurrency": {
           "type": "number",
-          "default": 10,
+          "default": 3,
           "minimum": 1,
           "maximum": 30,
-          "description": "Number of parallel HTTP requests during the search + read phases. Higher is faster but may hit rate limits."
+          "description": "Number of parallel HTTP requests during the search + read phases. Higher is faster but may hit the Z.AI MCP rate limit (~3-5 req/s safe)."
         },
         "zai.research.cacheTTL": {
           "type": "number",
@@ -158,26 +162,26 @@
           "type": "string",
           "default": "glm-5.2",
           "description": "Z.AI model used for planning queries and synthesizing the final research report. Use a high-context model (e.g. glm-5.2 with 1M context) for deep research."
+        },
+        "zai.research.webSearchToolName": {
+          "type": "string",
+          "default": "web_search_prime",
+          "description": "VS Code tool name for the Z.AI Web Search MCP server. The default matches the snake_case form VS Code exposes (e.g. `mcp_mcp-web-searc_web_search_prime`). Override if VS Code's MCP tool name format changes."
+        },
+        "zai.research.webReaderToolName": {
+          "type": "string",
+          "default": "webReader",
+          "description": "VS Code tool name for the Z.AI Web Reader MCP server. The default matches the camelCase form VS Code exposes (e.g. `mcp_web-reader-se_webReader`). Override if VS Code's MCP tool name format changes."
         }
       }
     },
     "chatParticipants": [
       {
         "id": "zai.research",
-        "name": "zai",
-        "fullName": "Z.AI Research",
-        "description": "Deep research agent powered by Z.AI Web Search + Web Reader. Iterates queries, fetches many sources, and synthesizes a report with inline citations.",
-        "isSticky": true,
-        "commands": [
-          {
-            "name": "deep",
-            "description": "Maximum depth: 100+ sources, multiple iterations. Slower but thorough."
-          },
-          {
-            "name": "quick",
-            "description": "Quick mode: 20 sources, 1-2 iterations. Fast and cheap."
-          }
-        ]
+        "name": "z-research",
+        "fullName": "Z.AI Deep Research",
+        "description": "Multi-iteration research that fetches many sources via Z.AI's Web Search and Web Reader MCP servers and synthesises a cited report.",
+        "isSticky": true
       }
     ],
     "languageModelChatProviders": [
@@ -197,67 +201,6 @@
               "secret": true
             }
           }
-        }
-      }
-    ],
-    "languageModelTools": [
-      {
-        "name": "zai_webSearch",
-        "displayName": "Z.AI Web Search",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "zai-search",
-        "icon": "$(search)",
-        "modelDescription": "Search the web using the Z.AI Web Search API. Returns up to 20 results with title, url and a short snippet. The results are intent-optimised for LLM consumption. Use this tool whenever the user asks about fresh internet content, recent events, documentation, or facts you are not certain about. For deeper coverage, call this tool multiple times with different query phrasings, then call zai_webRead on the most relevant URLs.",
-        "userDescription": "Search the web via Z.AI",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "query": {
-              "type": "string",
-              "description": "Natural-language search query. Be specific and focused; for broad topics, prefer multiple narrow queries."
-            },
-            "count": {
-              "type": "number",
-              "default": 10,
-              "minimum": 1,
-              "maximum": 20,
-              "description": "Number of results to return. Keep small (5-10) for quick lookups, larger (15-20) for research."
-            }
-          },
-          "required": [
-            "query"
-          ]
-        }
-      },
-      {
-        "name": "zai_webRead",
-        "displayName": "Z.AI Web Reader",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "zai-read",
-        "icon": "$(book)",
-        "modelDescription": "Read and extract the main content of a single URL using the Z.AI Web Reader API. Returns clean markdown (boilerplate, navigation and ads removed server-side). Use this tool when a search snippet is insufficient and you need the full article text. Always prefer this over asking the user to open a browser.",
-        "userDescription": "Read a URL via Z.AI",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "url": {
-              "type": "string",
-              "format": "uri",
-              "description": "Absolute http(s) URL to read. Must include the scheme."
-            },
-            "format": {
-              "type": "string",
-              "enum": [
-                "markdown",
-                "text"
-              ],
-              "default": "markdown",
-              "description": "Output format. 'markdown' preserves headings/links; 'text' is plain prose."
-            }
-          },
-          "required": [
-            "url"
-          ]
         }
       }
     ]
