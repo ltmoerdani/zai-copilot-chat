@@ -42,6 +42,9 @@ This lets you pick and use Z.AI GLM models directly from the Copilot Chat model 
 - **Reasoning debug** — opt-in `reasoning_content` logging to the Z.AI output channel
 - **Diagnostics command** — one-click markdown report showing exactly which models VS Code has registered
 - **Deep research** — `@z-research` chat participant that registers Z.AI's MCP Web Search + Web Reader servers and orchestrates them across many iterations to produce cited research reports. See [Deep Research](#-deep-research) below.
+- **Real-time research progress** — each search query completion is surfaced as a chat progress update (not one big batch update at the end).
+- **Defensive parsing** — handles Z.AI's quirky double-encoded JSON responses, rate-limit (429) recovery with exponential backoff, and per-call timeouts so a hung MCP call never blocks the run.
+- **Junk URL filter** — drops Instagram / TikTok / YouTube / asset CDNs / "how to host" guides at the candidate stage, saving 30s timeouts per junk URL.
 
 ---
 
@@ -68,22 +71,27 @@ Z.AI's Web Search and Web Reader are MCP servers (not REST endpoints). They are 
 
 For thorough research the participant runs its own loop, bypassing Copilot's per-turn tool-call cap:
 
-1. **Plan** — the synthesis model generates 5–10 diverse search queries from your topic.
-2. **Search** — queries run in parallel (bounded by `zai.research.concurrency`) via the `webSearchPrime` MCP tool.
-3. **Read** — top URLs are fetched via the `webReader` MCP tool with two-tier caching.
-4. **Rank** — sources are deduped and scored (BM25-style term overlap + recency boost).
-5. **Expand** — if budget remains and coverage is thin, new queries are generated from the gaps and the loop repeats.
-6. **Synthesise** — sources are chunked, each chunk is summarised (map), then a final cited report is produced (reduce).
+1. **Plan** — the synthesis model generates 5–10 high-quality, search-engine-friendly queries (concrete entities, action-oriented, varied phrasings, 3-8 keyword sweet spot).
+2. **Filter** — candidates are passed through a junk URL filter (Instagram, TikTok, YouTube, asset CDNs, "how to host" guides) and deduplicated by URL across queries.
+3. **Search** — queries run in parallel (bounded by `zai.research.concurrency`) via the `webSearchPrime` MCP tool. Each call has a 30s timeout; rate-limit (429) errors retry with exponential backoff.
+4. **Read** — top URLs are fetched via the `webReader` MCP tool with two-tier caching. Junk URLs are skipped before the read.
+5. **Rank** — sources are deduped and scored (BM25-style term overlap + recency boost). Only the top 25 most-relevant sources are sent to synthesis.
+6. **Expand** — if budget remains and coverage is thin, **gap analysis** of the previous round's top results drives 3–5 follow-up queries (no random re-rolls).
+7. **Synthesise** — top-25 sources are chunked (16K chars each), each chunk is summarised (map), then a final cited report is produced (reduce). The synthesis LLM is guided to maximise what the sources DO cover, not to give up if the user's exact angle isn't a perfect match.
+
+Real-time progress is surfaced to the chat as each search query completes (not as one big update at the end).
 
 ```mermaid
 flowchart TD
-    U["@z-research topic"] --> Plan[Plan: 5-10 queries]
-    Plan --> Search[Parallel search via MCP]
+    U["@z-research topic"] --> Plan[Plan: 5-10 quality queries]
+    Plan --> Filter[Filter: dedup + junk URL]
+    Filter --> Search[Parallel search via MCP, 30s timeout each]
+    Search -->|429| Retry[sleep 1s/2s/4s + retry]
     Search --> Read[Parallel webRead via MCP + cache]
-    Read --> Rank[Dedupe + BM25 rank]
+    Read --> Rank[Dedupe + BM25 rank top 25]
     Rank --> Done{Budget ok?}
-    Done -- no --> Synth[Map-reduce synthesize + citations]
-    Done -- yes --> Expand[Expand: 3-5 follow-up queries]
+    Done -- no --> Synth[Map-reduce synthesize 16K chunks]
+    Done -- yes --> Expand[Expand: gap analysis, 3-5 new queries]
     Expand --> Search
     Synth --> Out[Render report + clickable sources]
 ```
@@ -92,12 +100,19 @@ flowchart TD
 
 `@z-research <topic>` — single entry point, no slash commands.
 
-- **Default mode (quick):** ~20 sources, 1–2 iterations, ~30s. Cheap and fast.
-- **Deep mode:** include keywords like `deep`, `thorough`, `comprehensive`, `lengkap`, or `menyeluruh` in your prompt → up to 100+ sources, up to 5 iterations. Slower but thorough.
+- **Default mode (quick):** ~20 sources, 1–2 iterations, ~3–4 minutes end-to-end.
+- **Deep mode:** include keywords like `deep`, `thorough`, `comprehensive`, `lengkap`, or `menyeluruh` in your prompt → up to 100+ sources, up to 5 iterations.
 
 Examples:
 - `@z-research pricing kompetitor SaaS WhatsApp di Indonesia 2026` — quick mode
 - `@z-research deep research complete state of agentic coding tools June 2026` — deep mode
+
+**Typical performance** (verified with real user runs on Coding Plan):
+- ~8–15 search queries
+- ~30–130 candidate URLs (after junk filter)
+- ~25 sources actually read and ranked
+- ~3–5 LLM synthesis calls (1 reduce + N chunk summaries)
+- 2–4 minutes total wall-clock time per run
 
 ### First-time setup
 
@@ -112,7 +127,7 @@ The participant will display a clear error if the MCP tools are not yet connecte
 
 The final response is a markdown report with inline `[n]` citations and a clickable **Sources** list.
 
-> **📚 Implementation history** — see [`doc/deep-research-journey.md`](./doc/deep-research-journey.md) for the complete build log: phases, rolled-back approaches, 10 production bugs with root-cause analysis, and lessons learned.
+> **📚 Implementation history** — see [`doc/deep-research-journey.md`](./doc/deep-research-journey.md) for the complete build log: 5 initial phases, 3 production-driven polish phases, 22 production bugs with root-cause analysis, 15 lessons learned, and the final architecture.
 
 ---
 
@@ -153,6 +168,9 @@ For advanced usage, you can also run these commands via the Command Palette (`Cm
 |---|---|
 | `Z.AI: Manage Provider` | Manage API key, refresh models, or test connection |
 | `Z.AI: Set API Key` | Store or update your Z.AI API key |
+| `Z.AI: Setup MCP Servers` | Write the user's `mcp.json` with Z.AI Web Search + Web Reader (one-time, for `@z-research`) |
+| `Z.AI: Show Quota` | Open a detailed markdown report of all quota windows |
+| `Z.AI: Toggle Quota View` | Switch the status bar between 5-hour and weekly display |
 | `Z.AI: Diagnostics` | Show a markdown report of all registered Z.AI models |
 
 > **Note:** The native BYOK flow via **Language Models** (gear icon ⚙) is recommended.
@@ -190,9 +208,11 @@ The quota is fetched from `https://api.z.ai/api/monitor/usage/quota/limit` and a
 | `zai.experimentalContextIndicator` | `boolean` | `false` | Experimental: attempt to fill the Copilot Chat context indicator with real Z.AI token usage. Depends on VS Code internals. |
 | `zai.research.maxSources` | `number` | `100` | Max sources fetched during a `@z-research` run when deep mode is triggered. Lower to reduce cost/latency. |
 | `zai.research.maxIterations` | `number` | `5` | Max query-expansion iterations before synthesis (`1`–`10`). |
-| `zai.research.concurrency` | `number` | `3` | Parallel HTTP requests during search + read phases. Higher is faster but may hit the Z.AI MCP rate limit (~3-5 req/s safe). |
+| `zai.research.concurrency` | `number` | `3` | Parallel MCP calls during search + read phases. Higher is faster but may hit the Z.AI MCP rate limit (~3-5 req/s safe). |
 | `zai.research.cacheTTL` | `number` | `3600` | Cache TTL in seconds for Z.AI search + read results. `0` disables caching. |
-| `zai.research.synthesisModel` | `string` | `glm-5.2` | Z.AI model used for planning queries and synthesising the final report. Use a high-context model for deep research. |
+| `zai.research.synthesisModel` | `string` | `glm-5.2` | Z.AI model used for planning queries and synthesising the final report. Use a high-context model (e.g. glm-5.2 with 1M context) for deep research. |
+| `zai.research.webSearchToolName` | `string` | `web_search_prime` | VS Code tool name for the Z.AI Web Search MCP server. The default matches the snake_case form VS Code exposes (e.g. `mcp_mcp-web-searc_web_search_prime`). Override if VS Code's MCP tool name format changes. |
+| `zai.research.webReaderToolName` | `string` | `webReader` | VS Code tool name for the Z.AI Web Reader MCP server. Default matches the camelCase form VS Code exposes. Override if VS Code's MCP tool name format changes. |
 
 ---
 
@@ -217,6 +237,51 @@ If you still hit timeouts:
 5. **Check the Z.AI Output channel** — every request logs `[Timeout config: model=X flagship=Y multiplier=Z× connectionTimeout=…]` so you can confirm which budget was applied
 
 If the issue persists with `zai.requestTimeout = 300000` and a small context, the Z.AI API itself is the bottleneck — try a different Z.AI region/plan or contact [Z.AI support](https://z.ai).
+
+### "@z-research: MCP servers are not connected yet"
+
+The `@z-research` participant needs Z.AI's Web Search + Web Reader MCP servers registered with VS Code. To fix:
+
+1. **Run setup once**: open the Command Palette and run **Z.AI: Setup MCP Servers**. This writes the servers to your user `mcp.json` (macOS: `~/Library/Application Support/Code/User/mcp.json`, Windows: `%APPDATA%\Code\User\mcp.json`, Linux: `~/.config/Code/User/mcp.json`).
+2. **Click Reload** in the prompt to restart VS Code.
+3. **Verify in the MCP view** (Activity Bar → MCP). Both `zai-web-search-prime` and `zai-web-reader` should show as **Running**.
+4. **Re-run** `@z-research <topic>`.
+
+The participant will display a clear error with the currently-available tool names if MCP isn't connected yet.
+
+### "@z-research: No usable sources were found"
+
+Several possible causes:
+
+1. **Search queries returned empty results** — the topic may be too niche. Try rephrasing with concrete keywords.
+2. **All top URLs were filtered as junk** — if every returned URL was social-media or an asset CDN, the filter dropped them all. Try a more specific topic with named entities (e.g. "World Archery 2024 registration rules" instead of "archery registration").
+3. **Every read timed out** — check the Output channel for `[mcp-tools] Timeout (30000ms)` entries. If many, your Z.AI MCP servers may be rate-limited or unreachable.
+
+The diagnostic log is in **Output → Z.AI Research** and includes every search query, every read, and the parsed result count.
+
+### "@z-research takes 4+ minutes"
+
+That's the normal end-to-end time for a deep-mode run. The wall-clock time is bounded by:
+
+- **Search phase** — bounded by `zai.research.concurrency` (default 3) and the 30s per-call timeout.
+- **Read phase** — up to ~25 source reads in parallel, again 30s timeout each.
+- **Synth phase** — 3–5 LLM calls (1 reduce + N chunk summaries) on the synthesis model. With `glm-5.2` (1M context), this is fast.
+
+To shorten: use **quick mode** (omit `deep` / `thorough` / `menyeluruh` keywords from your prompt), lower `zai.research.maxSources`, or pick a smaller synthesis model.
+
+### "@z-research hits MCP rate limit (-429)"
+
+The participant automatically retries with exponential backoff (1s / 2s / 4s) on rate-limit responses. If you see persistent 429s in the log:
+
+- Lower `zai.research.concurrency` to `2` (default is 3).
+- The Z.AI Coding Plan has a monthly MCP quota (Lite=100, Pro=1K, Max=4K calls). Check your usage in the Z.AI dashboard.
+
+### "@z-research search query stuck/hangs"
+
+Each MCP call has a **30s per-call timeout**. A hung call is logged as `[mcp-tools] Timeout (30000ms) for search "..." — giving up on this query` and the orchestrator continues. If you see many timeouts:
+
+- Z.AI's MCP server may be having a transient issue — try again in a minute.
+- The query itself may be problematic. If a particular query consistently times out, consider rewording it in your prompt.
 
 ---
 
@@ -278,13 +343,17 @@ npm run package
 
 ### Tests
 
-The quota module has a unit test suite using Node's built-in test runner:
+Two test suites, both using Node's built-in test runner:
 
 ```bash
+# Quota module
 npx tsx --test src/test/quota.test.ts
+
+# Deep research modules
+npm test
 ```
 
-Covers `parseQuotaSnapshot`, quota window selection, `formatResetCountdown`, SVG donut generation (including clamping), `escapeMarkdown`, `QuotaAuthError` detection, and the `fetchQuotaSnapshot` auth-retry flow.
+The `npm test` runner covers 9 `vscode`-free pure modules: `mcpInputBuilders` (5), `mcpResponseParser` (15), `mcpRateLimit` (6), `mcpTimeout` (5), `mcpToolNameResolver` (9), `junkUrlFilter` (10), `ranker` (5), `budget` (5), `cache` (5), plus URL dedup (5). **75 tests, 100% pass rate, runs in ~600ms.**
 
 ---
 
