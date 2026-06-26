@@ -2,6 +2,23 @@
 
 All notable changes to the **Z.AI Copilot Chat** extension are documented here.
 
+## 0.3.1 — 2026-06-27
+
+### Fixed
+- **MCP tools leaked into regular Copilot Agent chat (critical)** — The Z.AI Web Search and Web Reader MCP servers were written to the user's global `mcp.json` by the `Z.AI: Setup MCP Servers` command. This made the tools available to **all** Copilot Agent sessions, not just `@z-research`. When the user asked Copilot Agent to do research in a normal chat, the agent picked up `web_search_prime` and got stuck on slow MCP calls.
+  - **Root cause:** Global `mcp.json` entries are visible to every chat participant and to the default Copilot Agent. There was no scoping.
+  - **Fix:** Replaced the `mcp.json` setup command with a **scoped `mcpServerDefinitionProvider`** (`vscode.lm.registerMcpServerDefinitionProvider`). The MCP servers are now provided dynamically by the extension and resolved on-demand (only when a tool is actually invoked). `resolveMcpServerDefinition` adds the `Authorization` header from SecretStorage at call time; if no API key is set, the server is skipped.
+  - **Result:** Regular Copilot Agent chat is completely unaffected. The Z.AI MCP tools only activate when `@z-research` (or the extension itself) invokes them. No `mcp.json` file is written to the user config dir.
+
+### Removed
+- **`Z.AI: Setup MCP Servers` command** — No longer needed. The MCP servers are now registered programmatically via the `mcpServerDefinitionProviders` contribution point (`id: zai.mcpProvider`) and resolved on-demand.
+
+### Migration
+- If you previously ran `Z.AI: Setup MCP Servers`, you can safely remove the `zai-web-search-prime` and `zai-web-reader` entries from your `~/Library/Application Support/Code/User/mcp.json` (macOS), `%APPDATA%\Code\User\mcp.json` (Windows), or `~/.config/Code/User/mcp.json` (Linux). The extension now manages these servers in-memory — they no longer need to be in the global config.
+
+### Added
+- **`contributes.mcpServerDefinitionProviders`** — New contribution point in `package.json` with `id: zai.mcpProvider`. This is the supported way to expose MCP servers from an extension without polluting the user's global `mcp.json`.
+
 ## 0.3.0 — 2026-06-26
 
 ### Added

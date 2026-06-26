@@ -2,7 +2,7 @@
   "name": "zai-copilot-chat",
   "displayName": "Z.AI Copilot Chat",
   "description": "Bring your own Z.AI API key to VS Code Copilot Chat. Adds Z.AI GLM models through the Language Model Chat Provider API, plus a `@z-research` deep-research chat participant that fetches hundreds of cited sources via Z.AI's MCP Web Search + Web Reader servers.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "ltmoerdani",
   "license": "MIT",
   "icon": "media/zai.png",
