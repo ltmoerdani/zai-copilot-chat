@@ -46,12 +46,23 @@ All notable changes to the **Z.AI Copilot Chat** extension are documented here.
 - **`zai_webSearch` / `zai_webRead` Language Model Tools** — built in Phase 1, then deleted. The hybrid A+B (tools + participant) approach added picker noise for marginal benefit. Single chat participant UX is cleaner.
 - **`zaiApiClient.ts`** — REST API client for Z.AI's `/api/paas/v4/tools/web_search` endpoint. The endpoint doesn't exist for Coding Plan users; we use MCP instead.
 
+### Critical regression — extension would not load (fixed)
+- **Extension crashed at activation: `MODULE_NOT_FOUND: p-limit`** — The deep research orchestrator imported `p-limit` from `node_modules`, but `vsce package` does not bundle `node_modules/`. When VS Code loaded the extension, `activate()` → `registerResearchFeatures()` → `require("p-limit")` threw, which took the entire extension host down — no Z.AI models appeared in the Language Models list and no model picker entries were registered.
+  **Fix:** inlined a tiny concurrency limiter as `src/research/pLimit.ts` (~40 lines, no npm deps). Removed `p-limit` and `robots-parser` from `dependencies` so the extension is fully self-contained.
+- **Model picker regression reverted** — During the deep research work, two non-API fields (`category`, `isUserSelectable`) were stripped from the model info object in `provideLanguageModelChatInformation`. Both are read by VS Code's `chatModelPicker.ts` (though they are not in the public `.d.ts`). Removing them caused the picker to silently switch back to the GitHub Copilot default model whenever the user selected a Z.AI model. Both fields are restored to match commit `ed26b28`.
+
 ### Performance (real user runs, 3 iterations)
 - **Initial run:** 8 queries · 30 URLs · 11 sources · 1 iteration · 217s
 - **Optimized run:** 15 queries · 129 URLs · 25 sources · 2 iterations · 250s (~10× more sources than the built-in Copilot web search)
 - **Final (with all optimizations):** 13 queries · 110 URLs · 25 sources · 2 iterations · 214s
 
-> **See [`doc/deep-research-journey.md`](./doc/deep-research-journey.md) for the full build log** — phases, rolled-back approaches, 22 production bugs with root-cause analysis, and lessons learned for future maintainers.
+### Regressions fixed
+- **Model picker regression — non-API fields stripped from `LanguageModelChatInformation`** — The previous build had two regressions from the working v0.2.5/ed26b28 baseline:
+  1. **`category: "Z.AI"` and `isUserSelectable: true` were removed** — both are valid fields in VS Code's `LanguageModelChatInformation` (since 1.90). Removing them caused the chat model picker to silently switch back to the GitHub Copilot default model when the user picked a Z.AI model. Both fields are restored.
+  2. **`isDefault: true` and a longer tooltip with `toLocaleString()` were added** — the `isDefault` flag and the formatted tooltip were assumed to be safe additions. Either change alone (or together) caused picker misbehaviour. Both are removed.
+- **Lesson learned** — `LanguageModelChatInformation` accepts several non-obvious fields (`category`, `isUserSelectable`, `endpointKind`) that are not in the public `.d.ts` but ARE used by the chat model picker. Always test picker behaviour with the real VS Code build before removing or adding fields; the public API reference alone is not enough.
+
+> **See [`doc/deep-research-journey.md`](./doc/deep-research-journey.md) for the full build log** — phases, rolled-back approaches, 25 production bugs with root-cause analysis, and lessons learned for future maintainers.
 
 ## 0.2.5 — 2026-06-24
 

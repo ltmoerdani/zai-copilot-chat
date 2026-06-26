@@ -234,9 +234,10 @@ export function activate(context: vscode.ExtensionContext) {
   void provider.refreshQuotaFromSecret();
   setupQuotaRefreshTimer(context);
 
-  // Register Z.AI web search + web reader language model tools (Part A of
-  // the deep research feature). Safe to call even if no API key is set — the
-  // tools surface a helpful error message back to the LLM in that case.
+  // Register Z.AI deep research features (@z-research participant + MCP setup command).
+  registerResearchFeatures(context);
+
+  // Register Z.AI deep research features (@z-research participant + MCP setup command).
   registerResearchFeatures(context);
 }
 

@@ -202,6 +202,7 @@ The quota is fetched from `https://api.z.ai/api/monitor/usage/quota/limit` and a
 | `zai.debugReasoning` | `boolean` | `false` | Write provider `reasoning_content` to **Output → Z.AI** for debugging |
 | `zai.requestTimeout` | `number` | `180000` | Connection timeout in ms. Auto-scaled **1.5×** for 200K flagship models (glm-5.1/5/4.7) and capped at 300000ms. Inactivity timer scales the same way (90–180s window). |
 | `zai.maxRetries` | `number` | `2` | Automatic retries on transient network errors (fetch failed, timeout, 5xx, 429) with exponential backoff (1s → 2s → max 10s + jitter). |
+| `zai.defaultModel` | `string` | `""` | Model id to mark as the default selection in the Copilot Chat model picker (e.g. `glm-5.2`). Leave empty to not mark any model as the default — users can still pick any model manually. |
 | `zai.showUsageStatusBar` | `boolean` | `true` | Show the latest Z.AI usage summary (prompt→output tokens) in the VS Code status bar after each response. |
 | `zai.showQuotaStatusBar` | `boolean` | `true` | Show the Z.AI Coding Plan quota (5-hour / weekly) in the VS Code status bar. Hover for a graphical SVG donut chart; click to toggle between windows. |
 | `zai.quotaRefreshInterval` | `number` | `5` | How often (in minutes) to refresh the Z.AI Coding Plan quota. `0` disables automatic refresh. |
@@ -237,6 +238,22 @@ If you still hit timeouts:
 5. **Check the Z.AI Output channel** — every request logs `[Timeout config: model=X flagship=Y multiplier=Z× connectionTimeout=…]` so you can confirm which budget was applied
 
 If the issue persists with `zai.requestTimeout = 300000` and a small context, the Z.AI API itself is the bottleneck — try a different Z.AI region/plan or contact [Z.AI support](https://z.ai).
+
+### "Z.AI model not selectable in the model picker" / "Can't pin Z.AI model"
+
+The Z.AI extension only sends the **official** `LanguageModelChatInformation` fields to VS Code. Non-API fields like `category` and `isUserSelectable` are not declared in the public VS Code API and can cause the picker to misbehave or even crash (see [doc/vscode-126-chatmodel-picker-crash.md](./doc/vscode-126-chatmodel-picker-crash.md) for the original incident).
+
+If the model picker doesn't show your Z.AI models or they can't be pinned:
+
+1. **Make sure Z.AI models are enabled in the picker.** Open the picker, search for "Z.AI", and click the eye (👁) icon to enable visibility. The eye icon is in the **Language Models** view (gear icon ⚙ → Z.AI) and toggles whether the model is listed in the picker.
+2. **Pin a model as default.** Set `zai.defaultModel` in your user settings (e.g. `glm-5.2`). The extension marks that model as `isDefault: true` so VS Code highlights it in the picker and seeds new chat sessions with it.
+3. **Reload the window** after changing `zai.defaultModel` (the model list is cached per-window).
+
+If the picker still misbehaves:
+
+- Open **Developer Tools** (`Cmd+Shift+P` → "Developer: Toggle Developer Tools") and look for console errors when you open the picker.
+- Check **Output → Z.AI** for any error logs from the model provider.
+- File an issue with the console error and your VS Code version.
 
 ### "@z-research: MCP servers are not connected yet"
 

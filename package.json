@@ -112,6 +112,11 @@
           "maximum": 5,
           "description": "Number of automatic retries on transient network errors (fetch failed, timeout, 5xx). Default 2. Set to 0 to disable retries."
         },
+        "zai.defaultModel": {
+          "type": "string",
+          "default": "",
+          "description": "Model id to mark as the default selection in the Copilot Chat model picker (e.g. `glm-5.2`). Leave empty to not mark any model as the default — users can still pick any model manually."
+        },
         "zai.showUsageStatusBar": {
           "type": "boolean",
           "default": true,
@@ -222,9 +227,5 @@
     "@types/vscode": "^1.118.0",
     "@vscode/vsce": "^3.6.0",
     "typescript": "^5.9.3"
-  },
-  "dependencies": {
-    "p-limit": "^3.1.0",
-    "robots-parser": "^3.0.1"
   }
 }

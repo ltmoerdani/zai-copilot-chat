@@ -20,7 +20,7 @@
 
 import * as vscode from "vscode";
 
-import pLimit from "p-limit";
+import { pLimit } from "./pLimit";
 
 import { BudgetManager, estimateTokens } from "./budget";
 import { isJunkUrl } from "./junkUrlFilter";

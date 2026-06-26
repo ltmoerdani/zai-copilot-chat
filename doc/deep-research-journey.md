@@ -24,8 +24,9 @@
 11. [Phase 6 — Production Validation (3 real user runs)](#11-phase-6--production-validation-3-real-user-runs)
 12. [Phase 7 — Polish & Performance (3 optimization passes)](#12-phase-7--polish--performance-3-optimization-passes)
 13. [Phase 8 — Prompt Quality](#13-phase-8--prompt-quality)
-14. [Updated Bug Log — 22 Production Bugs Fixed](#14-updated-bug-log--22-production-bugs-fixed)
-15. [Updated Lessons Learned (L1–L15)](#15-updated-lessons-learned-l1l15)
+14. [Phase 9 — Post-Ship Regression](#14-phase-9--post-ship-regression)
+15. [Updated Bug Log — 25 Production Bugs Fixed](#15-updated-bug-log--25-production-bugs-fixed)
+16. [Updated Lessons Learned (L1–L18)](#16-updated-lessons-learned-l1l18)
 
 ---
 
@@ -536,9 +537,51 @@ Both prompts are now general-purpose. The same code handles "how do archery team
 
 ---
 
-## 14. Updated Bug Log — 22 Production Bugs Fixed
+## 14. Phase 9 — Post-Ship Regression (the most embarrassing chapter)
 
-The 10 bugs from §8 plus 12 more from Phases 6-8:
+After the extension shipped at v0.3.0 and was installed locally, three catastrophic regressions were discovered in quick succession. Each was a direct consequence of touching code that worked.
+
+### Regression A — Model picker silently switches back to Copilot default
+
+**Symptom:** User picks `Z.AI / GLM-5.2` in the chat model picker. As soon as they send a message, the model auto-switches back to the GitHub Copilot default. Z.AI models appear in the picker but cannot be "pinned".
+
+**Root cause (initial misdiagnosis):** I assumed `category` and `isUserSelectable` were not part of the public `LanguageModelChatInformation` API and stripped them out, replacing them with an `isDefault` flag and a longer tooltip that included `toLocaleString()`.
+
+**Actual root cause:** VS Code's `chatModelPicker.ts` reads `category`, `isUserSelectable`, and `endpointKind` to decide grouping and selection behaviour. These fields are not in the public `.d.ts` but ARE consumed by the picker. Stripping them caused the picker to fall back to the GitHub Copilot default.
+
+**Fix:** Reverted the model info object to exactly match commit `ed26b28` (the last known-good shape). Restored `category: "Z.AI"`, `isUserSelectable: true`, `endpointKind: "chat-completions"`, and the simple `tooltip: Z.AI model: <id>`. Removed `isDefault`.
+
+### Regression B — Extension does not load at all (`MODULE_NOT_FOUND: p-limit`)
+
+**Symptom:** After the model picker fix was installed, the extension **disappeared entirely** from the Language Models list. No Z.AI provider visible. The provider could not be added.
+
+**Root cause:** The deep research orchestrator imported `p-limit` from `node_modules`. The `vsce package` command does **not** bundle `node_modules/` into the `.vsix`. When VS Code loaded the extension:
+
+```
+activate() → registerResearchFeatures()
+→ import "./research/index.ts"
+→ import "./orchestrator.ts"
+→ require("p-limit")
+→ Error: Cannot find module 'p-limit'
+```
+
+The unhandled exception took down the entire extension host. No models registered. No provider visible. The extension appeared dead.
+
+**Fix:** Inlined a tiny concurrency limiter as `src/research/pLimit.ts` (~40 lines, no npm deps). Removed `p-limit` and `robots-parser` from `dependencies` in `package.json`. The extension is now fully self-contained — zero runtime npm dependencies.
+
+### Regression C — `vsce package` silently includes broken state
+
+**Symptom:** The first `--force` reinstall reported success, but the installed code still had the old (broken) model info shape.
+
+**Root cause:** VS Code's extension host caches the loaded extension and refuses to overwrite a running extension. `--force` is not enough when the extension is still active in the current window.
+
+**Fix:** Always `--uninstall-extension` first, then `--install-extension`. And require a full VS Code restart (`Cmd+Q`, not just Reload Window) when the extension host has the old version loaded.
+
+---
+
+## 15. Updated Bug Log — 25 Production Bugs Fixed
+
+The 10 bugs from §8 plus 12 more from Phases 6-8, plus 3 more from Phase 9:
 
 ### 🔴 Bug 11 — "Stuck chat" on hung MCP call
 **Symptom:** 1 of 7 search queries hangs without response. `Promise.all` waits forever.
@@ -623,9 +666,29 @@ The 10 bugs from §8 plus 12 more from Phases 6-8:
 **Test:** Manual verification (visible in stats).
 **File:** [orchestrator.ts](../src/research/orchestrator.ts) (synth phase)
 
+### 🔴 Bug 23 — Model picker silently switches to Copilot default (Phase 9)
+**Symptom:** User picks Z.AI model in picker → auto-switches back to Copilot default on send.
+**Root cause:** Stripped `category` and `isUserSelectable` from model info object (assumed not in public API).
+**Fix:** Reverted to `ed26b28` shape exactly.
+**Test:** Manual verification.
+**File:** [extension.ts](../src/extension.ts) (`provideLanguageModelChatInformation`)
+
+### 🔴 Bug 24 — Extension does not load: `MODULE_NOT_FOUND: p-limit` (Phase 9)
+**Symptom:** Extension disappears from Language Models list entirely. No provider visible.
+**Root cause:** `p-limit` npm package imported at runtime but `vsce package` does not bundle `node_modules/`. Activation crash took down the extension host.
+**Fix:** Inlined `src/research/pLimit.ts`. Removed `dependencies` from `package.json`.
+**Test:** `grep 'require("p-limit")' out/research/orchestrator.js` returns nothing.
+**File:** [pLimit.ts](../src/research/pLimit.ts), [package.json](../package.json)
+
+### 🔴 Bug 25 — `vsce package --force` does not refresh loaded extension (Phase 9)
+**Symptom:** Force reinstall reports success but old code still runs.
+**Root cause:** VS Code extension host caches the loaded extension and refuses to overwrite a running extension.
+**Fix:** Always `--uninstall-extension` first, then `--install-extension`. Require full VS Code restart.
+**Test:** Manual verification.
+
 ---
 
-## 15. Updated Lessons Learned (L1–L15)
+## 16. Updated Lessons Learned (L1–L18)
 
 ### 🎯 L1 — Always ask the user's plan tier before integrating a metered API
 **Source:** Bug 2 (-1113 "Insufficient balance")
@@ -686,6 +749,27 @@ The 10 bugs from §8 plus 12 more from Phases 6-8:
 ### 🎯 L15 — Expansion = gap analysis, not random variation
 **Source:** Bug 18
 **Insight:** Pass `searchHits` to the expand prompt so the LLM can identify gaps instead of re-rolling similar queries. Generic prompt + actual results = targeted follow-ups.
+
+### 🎯 L16 — `vsce package` does NOT bundle `node_modules/`
+**Source:** Bug 24 (Phase 9 — extension did not load)
+**Insight:** `vsce package` produces a `.vsix` that contains only the files listed in `.vscodeignore` (which by default excludes `node_modules/`). If your extension imports any npm package at runtime, the import will throw `MODULE_NOT_FOUND` when VS Code loads the extension, crashing the extension host. **Three valid approaches:**
+1. Use a bundler (esbuild, webpack, rollup) to inline all imports into a single `dist/extension.js`
+2. Inline the small utility yourself (we did this for `p-limit` — 40 lines)
+3. Set `"dependencies"` in `package.json` AND ensure your bundler or `.vscodeignore` includes `node_modules/` (rare, bloats the `.vsix`)
+
+For simple utilities (concurrency limiter, URL normalizer), inlining is the cleanest approach. For complex libraries (React, Playwright), use a bundler.
+
+### 🎯 L17 — Don't touch `LanguageModelChatInformation` fields that work
+**Source:** Bug 23 (Phase 9 — model picker regression)
+**Insight:** VS Code's `chatModelPicker.ts` reads several fields that are not in the public `LanguageModelChatInformation` `.d.ts`: `category`, `isUserSelectable`, and `endpointKind`. Stripping them causes the picker to silently fall back to the default model. Always:
+- Compare with `git show <known-good-commit>:src/extension.ts` before editing
+- Test picker behaviour in a real VS Code build (not just compile)
+- Don't add speculative fields like `isDefault` either — they can break the picker just as easily
+- The public API reference alone is NOT enough; the picker consumes undocumented fields
+
+### 🎯 L18 — Uninstall before reinstall; full restart, not Reload Window
+**Source:** Bug 25 (Phase 9 — `--force` did not refresh)
+**Insight:** VS Code's extension host caches loaded extensions and refuses to overwrite a running extension even with `--force`. Always `--uninstall-extension` first, then `--install-extension`. After reinstalling an extension that was already active, require a **full VS Code restart** (`Cmd+Q` on macOS, not just "Developer: Reload Window"). Reload Window reuses the same extension host process and may keep the old code in memory.
 
 ---
 
