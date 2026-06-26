@@ -24,6 +24,7 @@ import {
   hasQuotaSnapshot,
   type QuotaSnapshot,
 } from "./quota";
+import { registerResearchFeatures } from "./research";
 
 const VENDOR = "zai";
 const SECRET_KEY = "zai.apiKey";
@@ -232,6 +233,12 @@ export function activate(context: vscode.ExtensionContext) {
   // Initial quota fetch + periodic refresh
   void provider.refreshQuotaFromSecret();
   setupQuotaRefreshTimer(context);
+
+  // Register Z.AI deep research features (@z-research participant + MCP setup command).
+  registerResearchFeatures(context);
+
+  // Register Z.AI deep research features (@z-research participant + MCP setup command).
+  registerResearchFeatures(context);
 }
 
 function setupQuotaRefreshTimer(context: vscode.ExtensionContext): void {

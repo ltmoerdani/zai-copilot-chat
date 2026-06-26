@@ -1,8 +1,8 @@
 {
   "name": "zai-copilot-chat",
   "displayName": "Z.AI Copilot Chat",
-  "description": "Bring your own Z.AI API key to VS Code Copilot Chat. Adds Z.AI GLM models through the Language Model Chat Provider API.",
-  "version": "0.2.5",
+  "description": "Bring your own Z.AI API key to VS Code Copilot Chat. Adds Z.AI GLM models through the Language Model Chat Provider API, plus a `@z-research` deep-research chat participant that fetches hundreds of cited sources via Z.AI's MCP Web Search + Web Reader servers.",
+  "version": "0.3.0",
   "publisher": "ltmoerdani",
   "license": "MIT",
   "icon": "media/zai.png",
@@ -19,7 +19,11 @@
     "language model",
     "glm",
     "llm",
-    "chat"
+    "chat",
+    "mcp",
+    "web-search",
+    "deep-research",
+    "research"
   ],
   "repository": {
     "type": "git",
@@ -61,6 +65,10 @@
       {
         "command": "zai.toggleQuotaView",
         "title": "Z.AI: Toggle Quota View"
+      },
+      {
+        "command": "zai.setupMcp",
+        "title": "Z.AI: Setup MCP Servers"
       }
     ],
     "configuration": {
@@ -104,6 +112,11 @@
           "maximum": 5,
           "description": "Number of automatic retries on transient network errors (fetch failed, timeout, 5xx). Default 2. Set to 0 to disable retries."
         },
+        "zai.defaultModel": {
+          "type": "string",
+          "default": "",
+          "description": "Model id to mark as the default selection in the Copilot Chat model picker (e.g. `glm-5.2`). Leave empty to not mark any model as the default — users can still pick any model manually."
+        },
         "zai.showUsageStatusBar": {
           "type": "boolean",
           "default": true,
@@ -125,9 +138,61 @@
           "type": "boolean",
           "default": false,
           "description": "Experimental: attempt to fill the Copilot Chat context indicator with real Z.AI token usage. Depends on VS Code internals and may break across updates."
+        },
+        "zai.research.maxSources": {
+          "type": "number",
+          "default": 100,
+          "minimum": 5,
+          "maximum": 500,
+          "description": "Maximum number of sources fetched during a deep research run (`@zai.research /deep`). Lower this to reduce cost and latency."
+        },
+        "zai.research.maxIterations": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "maximum": 10,
+          "description": "Maximum query-expansion iterations before final synthesis. Each iteration searches new queries derived from coverage gaps."
+        },
+        "zai.research.concurrency": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 30,
+          "description": "Number of parallel HTTP requests during the search + read phases. Higher is faster but may hit the Z.AI MCP rate limit (~3-5 req/s safe)."
+        },
+        "zai.research.cacheTTL": {
+          "type": "number",
+          "default": 3600,
+          "minimum": 0,
+          "maximum": 86400,
+          "description": "Cache time-to-live in seconds for Z.AI search and read results. Set to 0 to disable caching. Default 1 hour."
+        },
+        "zai.research.synthesisModel": {
+          "type": "string",
+          "default": "glm-5.2",
+          "description": "Z.AI model used for planning queries and synthesizing the final research report. Use a high-context model (e.g. glm-5.2 with 1M context) for deep research."
+        },
+        "zai.research.webSearchToolName": {
+          "type": "string",
+          "default": "web_search_prime",
+          "description": "VS Code tool name for the Z.AI Web Search MCP server. The default matches the snake_case form VS Code exposes (e.g. `mcp_mcp-web-searc_web_search_prime`). Override if VS Code's MCP tool name format changes."
+        },
+        "zai.research.webReaderToolName": {
+          "type": "string",
+          "default": "webReader",
+          "description": "VS Code tool name for the Z.AI Web Reader MCP server. The default matches the camelCase form VS Code exposes (e.g. `mcp_web-reader-se_webReader`). Override if VS Code's MCP tool name format changes."
         }
       }
     },
+    "chatParticipants": [
+      {
+        "id": "zai.research",
+        "name": "z-research",
+        "fullName": "Z.AI Deep Research",
+        "description": "Multi-iteration research that fetches many sources via Z.AI's Web Search and Web Reader MCP servers and synthesises a cited report.",
+        "isSticky": true
+      }
+    ],
     "languageModelChatProviders": [
       {
         "vendor": "zai",
@@ -152,6 +217,7 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
+    "test": "tsc -p ./ && node --test out/test/**/*.test.js",
     "package": "vsce package",
     "install-local": "vsce package && code --install-extension *.vsix --force",
     "vscode:prepublish": "npm run compile"

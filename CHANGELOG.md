@@ -2,6 +2,68 @@
 
 All notable changes to the **Z.AI Copilot Chat** extension are documented here.
 
+## 0.3.0 — 2026-06-26
+
+### Added
+- **Deep research via `@z-research` chat participant** — orchestrates Z.AI's MCP Web Search and Web Reader tools across multiple iterations to produce cited research reports with hundreds of sources, far beyond Copilot's 2-3 link limit.
+- **5-phase orchestrator** — plan queries → parallel search → read top URLs → rank by BM25+recency → map-reduce synthesize with inline `[n]` citations.
+- **Real-time progress reporting** — `parallelSearch` is an async generator that yields a phase per completed query, so the chat shows progress as each search finishes instead of one big batch update.
+- **`Z.AI: Setup MCP Servers` command** — one-time setup that writes the user's `mcp.json` with Z.AI's official Web Search + Web Reader Streamable HTTP servers. No more dropdown noise from auto-registered MCP servers.
+- **Quick / Deep mode** — keyword-based mode detection (`deep`, `thorough`, `comprehensive`, `lengkap`, `menyeluruh` trigger deep mode). Deep mode = up to 100 sources, 5 iterations. Quick mode = ~20 sources, 1-2 iterations.
+- **Two-tier caching** — in-memory + persistent workspace cache for search results and read content. TTL configurable via `zai.research.cacheTTL`.
+- **Retry with exponential backoff for rate limits** — automatic retry on Z.AI MCP -429 (`Rate limit reached`), with 1s/2s/4s backoff (max 2 retries per call).
+- **Per-call timeout** — `withTimeout()` wrapper around `vscode.lm.invokeTool` (30s default). Failed calls return `[]` (search) or stub (read) so a hung query never blocks the whole run.
+- **Junk URL filter** — `isJunkUrl()` drops obvious junk patterns (Instagram / TikTok / YouTube / Facebook, asset CDNs, "how to host" guides, regional selection pages) at the candidate stage. Saves up to 30s per junk URL.
+- **URL dedup in candidates** — same URL across multiple queries is collapsed via `normalizeUrlForDedupe()` before `webRead` is called.
+- **Top-K source cap for synthesis** — only the top 25 most-relevant sources are sent to the synthesis LLM, not all read sources. Bounded chunk count → bounded chunk-summary LLM calls.
+- **Quality-first planning & expand prompts** — planner LLM is given criteria for "what makes a good query" (concrete entities, action-oriented, varied phrasings, 3-8 keyword sweet spot) and **gap-analysis context** (top-20 results from previous round) for expansion queries. Generic for all topics, not overfit to any domain.
+- **Pure modules for unit testing** — 9 `vscode`-free modules: `mcpToolNameResolver`, `mcpResponseParser`, `mcpInputBuilders`, `mcpRateLimit`, `mcpTimeout`, `junkUrlFilter`, `ranker`, `budget`, `cache`.
+- **75 unit tests** — covering BM25 ranking, budget guards, caching, fuzzy MCP tool name resolution, MCP envelope unwrapping, double-encoded JSON parsing, rate limit detection, per-call timeout, input field name contracts, URL dedup, and junk URL filtering.
+
+### Settings
+- `zai.research.maxSources` (default `100`) — max sources in deep mode
+- `zai.research.maxIterations` (default `5`) — max query-expansion iterations
+- `zai.research.concurrency` (default `3`) — parallel MCP calls (safe for rate limit)
+- `zai.research.cacheTTL` (default `3600`) — search/read cache TTL in seconds
+- `zai.research.synthesisModel` (default `glm-5.2`) — LLM for planning + synthesis
+- `zai.research.webSearchToolName` (default `web_search_prime`) — override for VS Code MCP tool name format changes
+- `zai.research.webReaderToolName` (default `webReader`) — override for VS Code MCP tool name format changes
+
+### Fixed (during deep research development)
+- **"search_query cannot be empty" (-400)** — was sending `{ query, count }` instead of `{ search_query, count }`. Extracted `buildWebSearchInput` / `buildWebReadInput` to a pure module with field-name contract tests.
+- **Tool confirmation modal on every call** — was hard-coding `toolInvocationToken: undefined`. Now forwards `request.toolInvocationToken` from the chat request through the orchestrator to `McpToolInvoker`, so VS Code treats calls as user-authorized.
+- **"0 URLs considered" despite successful MCP calls** — Z.AI MCP server double-encodes responses (text field value is a stringified JSON array). New `tryJsonParseDeep()` peels up to 3 layers of stringification.
+- **Rate limit -429 with no recovery** — added `RateLimitError` detection (regex on `MCP error -429` / `Rate limit`) and exponential backoff in `McpToolInvoker.webSearch`. Also reduced default concurrency from 10 to 3.
+- **"MCP not connected" with tools visible** — VS Code exposes MCP tools as `mcp_<server-truncated>_<toolname>` (e.g. `mcp_mcp-web-searc_web_search_prime`), not bare names. New fuzzy name resolver (3 strategies: exact → last-segment with snake/camel conversion → substring).
+- **Participant disappeared from `@z` autocomplete** — VS Code chat picker matches on `name`, not `id`. Renamed `research` → `z-research` (kebab-case starting with `z`).
+- **Dropdown noise from MCP definition provider** — registering `mcpServerDefinitionProviders` added 4 picker entries. Removed in favor of one-time `zai.setupMcp` command for a single clean `@z-research` entry.
+- **"Stuck chat" on hung MCP call** — `vscode.lm.invokeTool` doesn't support `AbortSignal`, so wrapped each call in `withTimeout(thenable, 30s)`. Failed calls return `[]` so the orchestrator continues.
+- **40+ LLM calls per research run** — chunk size 8K was too small (25 chunks for 100 sources). Increased to 16K (halves chunk count) and added a top-25 source cap for synthesis. ~60% fewer LLM calls per run.
+- **Duplicate sources list in output** — the synthesis LLM already produces a `## Sources` section; the participant handler was appending a second `### Sources` list. Removed the duplicate.
+- **Junk URLs wasting 30s timeouts** — Instagram / TikTok / YouTube / asset CDNs / "how to host" guides filtered at the candidate stage before `webRead` is called.
+
+### Removed
+- **`zai_webSearch` / `zai_webRead` Language Model Tools** — built in Phase 1, then deleted. The hybrid A+B (tools + participant) approach added picker noise for marginal benefit. Single chat participant UX is cleaner.
+- **`zaiApiClient.ts`** — REST API client for Z.AI's `/api/paas/v4/tools/web_search` endpoint. The endpoint doesn't exist for Coding Plan users; we use MCP instead.
+
+### Critical regression — extension would not load (fixed)
+- **Extension crashed at activation: `MODULE_NOT_FOUND: p-limit`** — The deep research orchestrator imported `p-limit` from `node_modules`, but `vsce package` does not bundle `node_modules/`. When VS Code loaded the extension, `activate()` → `registerResearchFeatures()` → `require("p-limit")` threw, which took the entire extension host down — no Z.AI models appeared in the Language Models list and no model picker entries were registered.
+  **Fix:** inlined a tiny concurrency limiter as `src/research/pLimit.ts` (~40 lines, no npm deps). Removed `p-limit` and `robots-parser` from `dependencies` so the extension is fully self-contained.
+- **Model picker regression reverted** — During the deep research work, two non-API fields (`category`, `isUserSelectable`) were stripped from the model info object in `provideLanguageModelChatInformation`. Both are read by VS Code's `chatModelPicker.ts` (though they are not in the public `.d.ts`). Removing them caused the picker to silently switch back to the GitHub Copilot default model whenever the user selected a Z.AI model. Both fields are restored to match commit `ed26b28`.
+
+### Performance (real user runs, 3 iterations)
+- **Initial run:** 8 queries · 30 URLs · 11 sources · 1 iteration · 217s
+- **Optimized run:** 15 queries · 129 URLs · 25 sources · 2 iterations · 250s (~10× more sources than the built-in Copilot web search)
+- **Final (with all optimizations):** 13 queries · 110 URLs · 25 sources · 2 iterations · 214s
+
+### Regressions fixed
+- **Model picker regression — non-API fields stripped from `LanguageModelChatInformation`** — The previous build had two regressions from the working v0.2.5/ed26b28 baseline:
+  1. **`category: "Z.AI"` and `isUserSelectable: true` were removed** — both are valid fields in VS Code's `LanguageModelChatInformation` (since 1.90). Removing them caused the chat model picker to silently switch back to the GitHub Copilot default model when the user picked a Z.AI model. Both fields are restored.
+  2. **`isDefault: true` and a longer tooltip with `toLocaleString()` were added** — the `isDefault` flag and the formatted tooltip were assumed to be safe additions. Either change alone (or together) caused picker misbehaviour. Both are removed.
+- **Lesson learned** — `LanguageModelChatInformation` accepts several non-obvious fields (`category`, `isUserSelectable`, `endpointKind`) that are not in the public `.d.ts` but ARE used by the chat model picker. Always test picker behaviour with the real VS Code build before removing or adding fields; the public API reference alone is not enough.
+
+> **See [`doc/deep-research-journey.md`](./doc/deep-research-journey.md) for the full build log** — phases, rolled-back approaches, 25 production bugs with root-cause analysis, and lessons learned for future maintainers.
+
 ## 0.2.5 — 2026-06-24
 
 ### Fixed
