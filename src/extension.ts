@@ -25,6 +25,11 @@ import {
   type QuotaSnapshot,
 } from "./quota";
 import { registerResearchFeatures } from "./research";
+import {
+  collectConfiguredApiKeysFromInspect,
+  hasAnyKnownApiKey,
+  planApiKeyClear,
+} from "./apiKeyState";
 
 const VENDOR = "zai";
 const SECRET_KEY = "zai.apiKey";
@@ -91,18 +96,6 @@ interface ApiSettings {
   requestTimeout: number;
   maxRetries: number;
 }
-
-interface LanguageModelConfiguration {
-  apiKey?: unknown;
-}
-
-type ConfiguredLanguageModelInfoOptions = vscode.PrepareLanguageModelChatModelOptions & {
-  configuration?: LanguageModelConfiguration;
-};
-
-type ConfiguredLanguageModelResponseOptions = vscode.ProvideLanguageModelChatResponseOptions & {
-  configuration?: LanguageModelConfiguration;
-};
 
 interface BaseModelLimits {
   contextWindow: number;
@@ -523,10 +516,81 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
     this.getOutputChannel().appendLine(`[${new Date().toISOString()}] ${message}`);
   }
 
+  private clearCachedApiKeys(): string[] {
+    const keys = new Set<string>();
+    for (const apiKey of this.apiKeysByModelId.values()) {
+      keys.add(apiKey);
+    }
+    this.apiKeysByModelId.clear();
+    return Array.from(keys);
+  }
+
+  private maskApiKey(apiKey: string): string {
+    const trimmed = apiKey.trim();
+    if (trimmed.length <= 8) {
+      return trimmed.replace(/.(?=.{4})/g, "*");
+    }
+    const keep = 4;
+    return `${trimmed.slice(0, keep)}…${trimmed.slice(-keep)}`;
+  }
+
+  private async clearConfiguredProviderApiKey(): Promise<string[]> {
+    const configuration = vscode.workspace.getConfiguration("zai");
+    const inspect = configuration.inspect<string>("apiKey");
+    if (!inspect) {
+      return [];
+    }
+
+    const keys = collectConfiguredApiKeysFromInspect(inspect);
+    if (keys.length === 0) {
+      return [];
+    }
+
+    // Map the numeric target codes produced by `planApiKeyClear` back to the
+    // real `vscode.ConfigurationTarget` enum values.
+    const targetByCode: Record<number, vscode.ConfigurationTarget> = {
+      1: vscode.ConfigurationTarget.Global,
+      2: vscode.ConfigurationTarget.Workspace,
+      3: vscode.ConfigurationTarget.WorkspaceFolder,
+    };
+
+    for (const step of planApiKeyClear(inspect)) {
+      const target = targetByCode[step.target];
+      if (target === undefined) {
+        this.log(`Skipping unknown configuration target code ${step.target}`);
+        continue;
+      }
+
+      // Language-scoped overrides require a language-scoped configuration
+      // and `overrideInLanguage: true`; flat targets use the base config.
+      const config = step.languageId
+        ? vscode.workspace.getConfiguration("zai", { languageId: step.languageId })
+        : configuration;
+
+      try {
+        await config.update("apiKey", undefined, target, step.languageId ? true : undefined);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const scope = step.languageId ? ` (language "${step.languageId}")` : "";
+        this.log(`Failed to clear zai.apiKey for target ${target}${scope}: ${message}`);
+      }
+    }
+
+    return Array.from(keys);
+  }
+
   async manage(): Promise<void> {
     const apiKey = await this.context.secrets.get(SECRET_KEY);
+    const cachedApiKeys = Array.from(this.apiKeysByModelId.values());
+    const configuration = vscode.workspace.getConfiguration("zai");
+    const configuredApiKeys = collectConfiguredApiKeysFromInspect(configuration.inspect<string>("apiKey"));
 
-    if (!apiKey) {
+    // Reuse the already-loaded `apiKey` instead of re-reading SecretStorage,
+    // and short-circuit on the boolean helper so we don't materialize the
+    // full key list just to decide whether to show the manage menu.
+    const hasExistingKeys = hasAnyKnownApiKey({ secretApiKey: apiKey, cachedApiKeys, configuredApiKeys });
+
+    if (!hasExistingKeys) {
       await this.setApiKey();
       return;
     }
@@ -555,9 +619,26 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
     }
 
     if (choice.action === "clear") {
+      const allKeys = new Set<string>();
+
+      if (apiKey) {
+        allKeys.add(apiKey);
+      }
+      for (const cachedKey of this.clearCachedApiKeys()) {
+        allKeys.add(cachedKey);
+      }
+
+      const configuredKeys = await this.clearConfiguredProviderApiKey();
+      configuredKeys.forEach((key) => allKeys.add(key));
+
       await this.context.secrets.delete(SECRET_KEY);
       this.changeEmitter.fire();
-      vscode.window.showInformationMessage("Z.AI API key cleared.");
+
+      const cleared = Array.from(allKeys).map((key) => this.maskApiKey(key));
+      this.log(`Cleared Z.AI API key(s): ${cleared.join(", ")}`);
+      vscode.window.showInformationMessage(
+        cleared.length > 0 ? "Z.AI API key cleared." : "Z.AI API key cleanup performed.",
+      );
       return;
     }
 
@@ -759,7 +840,8 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
     options: vscode.PrepareLanguageModelChatModelOptions,
     token: vscode.CancellationToken
   ): Promise<ZaiModel[]> {
-    const apiKey = getConfiguredApiKey(options as ConfiguredLanguageModelInfoOptions);
+    // Always prefer SecretStorage over provider configuration to avoid stale cached keys
+    const apiKey = await this.context.secrets.get(SECRET_KEY);
 
     if (!apiKey) {
       return [];
@@ -803,9 +885,9 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
     progress: vscode.Progress<vscode.LanguageModelResponsePart>,
     token: vscode.CancellationToken
   ): Promise<void> {
-    const apiKey =
-      getConfiguredApiKey(options as ConfiguredLanguageModelResponseOptions)
-      ?? this.apiKeysByModelId.get(model.id);
+    // Always prefer SecretStorage over provider configuration to avoid stale cached keys
+    const secretApiKey = await this.context.secrets.get(SECRET_KEY);
+    const apiKey = secretApiKey ?? this.apiKeysByModelId.get(model.id);
 
     if (!apiKey) {
       throw new Error("Z.AI API key is required. Use the Z.AI gear icon in Language Models to configure it, then reload the window.");
@@ -923,11 +1005,6 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
     }
   }
 
-}
-
-function getConfiguredApiKey(options?: { configuration?: LanguageModelConfiguration }): string | undefined {
-  const configuredApiKey = options?.configuration?.apiKey;
-  return typeof configuredApiKey === "string" && configuredApiKey.trim() ? configuredApiKey.trim() : undefined;
 }
 
 interface RequestUsageSummary {
