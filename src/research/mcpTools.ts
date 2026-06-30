@@ -1,14 +1,24 @@
 /**
- * Thin wrapper around `vscode.lm.invokeTool` for the Z.AI MCP tools.
+ * Direct HTTP client for Z.AI MCP Streamable HTTP endpoints.
  *
- * VS Code exposes MCP-registered tools through the same `invokeTool` API as
- * native extension tools. The orchestrator uses this helper to call
- * `webSearchPrime` and `webReader` without re-implementing the MCP protocol.
+ * This module calls the Z.AI Web Search and Web Reader MCP servers **directly**
+ * via `fetch()` — without registering them with VS Code's MCP infrastructure.
  *
- * The MCP tool name passed in should be the bare name reported by the MCP
- * server (e.g. `webSearchPrime`, `webReader`). If the tool is not yet
- * connected or VS Code exposes it with a server prefix, the caller can pass
- * the fully-qualified name directly.
+ * Why direct HTTP instead of `vscode.lm.invokeTool`?
+ * - `vscode.lm.invokeTool` requires the MCP server to be registered (either
+ *   via `mcp.json` or `mcpServerDefinitionProvider`). Both approaches make
+ *   the tools visible to Copilot Agent, which then invokes them during
+ *   regular chat and gets stuck on slow MCP calls.
+ * - By calling the HTTP endpoint directly, the tools are completely invisible
+ *   to VS Code's tool infrastructure. Only `@z-research` can invoke them.
+ *
+ * The Z.AI MCP servers use the Streamable HTTP transport:
+ *   POST https://api.z.ai/api/mcp/web_search_prime/mcp
+ *   Content-Type: application/json
+ *   Authorization: Bearer <api-key>
+ *   Accept: application/json, text/event-stream
+ *
+ * The request body is a JSON-RPC 2.0 `tools/call` message.
  */
 
 import * as vscode from "vscode";
@@ -24,10 +34,6 @@ import {
 } from "./mcpRateLimit";
 import { TimeoutError, withTimeout } from "./mcpTimeout";
 import {
-  camelToSnake,
-  resolveToolName,
-} from "./mcpToolNameResolver";
-import {
   extractReadResult,
   extractSearchResults,
 } from "./mcpResponseParser";
@@ -36,47 +42,23 @@ import type {
   ZaiSearchResult,
 } from "./types";
 
-/** Default per-call timeout for MCP tool invocations (30s). */
 const DEFAULT_TIMEOUT_MS = 30_000;
-
-/** Default retry budget for rate-limit errors per call. */
 const DEFAULT_RETRY_COUNT = 2;
-
-/** Backoff base — actual delay is `BASE_BACKOFF_MS * 2^(attempt-1)`. */
 const BASE_BACKOFF_MS = 1_000;
+
+const MCP_WEB_SEARCH_URL = "https://api.z.ai/api/mcp/web_search_prime/mcp";
+const MCP_WEB_READER_URL = "https://api.z.ai/api/mcp/web_reader/mcp";
+const SECRET_KEY = "zai.apiKey";
 
 export interface McpToolInvokerOptions {
   webSearchToolName: string;
   webReaderToolName: string;
   outputChannel?: vscode.OutputChannel;
+  secrets: vscode.SecretStorage;
 }
 
 export class McpToolInvoker {
-  /** Cache of resolved tool names to avoid scanning `vscode.lm.tools` per call. */
-  private readonly nameCache = new Map<string, string | undefined>();
-
-  /**
-   * Test seam: when non-null, `resolveToolName` reads from this list
-   * instead of `vscode.lm.tools`. Used by the unit tests to exercise the
-   * resolution algorithm without the VS Code runtime.
-   */
-  private mockTools: ReadonlyArray<{ name: string }> | undefined;
-
   constructor(private readonly options: McpToolInvokerOptions) {}
-
-  /** @internal — test seam. Returns a new invoker with a mocked tool list. */
-  withMockTools(tools: ReadonlyArray<{ name: string }> | string[]): McpToolInvoker {
-    const next = new McpToolInvoker(this.options);
-    next.mockTools = tools.map((t) =>
-      typeof t === "string" ? { name: t } : t,
-    );
-    return next;
-  }
-
-  /** @internal — test seam. Calls the private resolver. */
-  resolveForTest(preferred: string): string | undefined {
-    return this.resolveToolName(preferred);
-  }
 
   private log(message: string): void {
     this.options.outputChannel?.appendLine(
@@ -84,89 +66,138 @@ export class McpToolInvoker {
     );
   }
 
+  private async getApiKey(): Promise<string> {
+    const key = await this.options.secrets.get(SECRET_KEY);
+    if (!key) {
+      throw new Error(
+        "Z.AI API key is required. Use 'Z.AI: Set API Key' first.",
+      );
+    }
+    return key;
+  }
+
   /**
-   * Resolve the tool name VS Code actually exposes.
-   *
-   * MCP tools can appear under several naming patterns, with mixed case:
-   *   - `webSearchPrime`                              (bare camelCase)
-   *   - `web_search_prime`                            (bare snake_case)
-   *   - `zai-web-search-prime.webSearchPrime`         (server.tool dot)
-   *   - `zai-web-search-prime__web_search_prime`      (server__tool dunder)
-   *   - `mcp_zai-web-searc_web_search_prime`          (truncated, snake)
-   *
-   * We try exact match first, then progressively relax: snake↔camel case
-   * conversion, then substring match. The resolved name is cached so each
-   * call is cheap.
+   * Call a Z.AI MCP tool via direct HTTP (Streamable HTTP transport).
+   * Sends a JSON-RPC `tools/call` request and parses the response.
    */
-  private resolveToolName(preferred: string): string | undefined {
-    return resolveToolName(preferred, this.mockTools ?? vscode.lm.tools, this.nameCache);
-  }
+  private async callMcpTool(
+    endpoint: string,
+    toolName: string,
+    input: Record<string, unknown>,
+    timeoutMs: number,
+    label: string,
+  ): Promise<string> {
+    const apiKey = await this.getApiKey();
 
-  /** List all tools currently available to the extension. */
-  listAvailableTools(): string[] {
-    return vscode.lm.tools.map((t) => t.name);
-  }
+    // JSON-RPC 2.0 tools/call request
+    const body = JSON.stringify({
+      jsonrpc: "2.0",
+      id: Date.now(),
+      method: "tools/call",
+      params: {
+        name: toolName,
+        arguments: input,
+      },
+    });
 
-  /** @internal — test seam. Exposes the pure case converter. */
-  camelToSnakeForTest(s: string): string {
-    return camelToSnake(s);
+    const fetchPromise = fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body,
+    }).then(async (response) => {
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        throw new Error(`MCP HTTP ${response.status}: ${text.slice(0, 200)}`);
+      }
+      // The response can be application/json or text/event-stream (SSE).
+      // For Streamable HTTP, the JSON-RPC response is in the SSE data field.
+      const contentType = response.headers.get("content-type") ?? "";
+      if (contentType.includes("text/event-stream")) {
+        return this.parseSseResponse(response);
+      }
+      return response.text();
+    });
+
+    return withTimeout(fetchPromise, timeoutMs, label);
   }
 
   /**
-   * Call the Web Search MCP tool. The Z.AI MCP server expects:
-   *   - `search_query` (string, required)
-   *   - `count` (number, 1-50, optional)
-   * Other parameters like `search_engine` and `search_recency_filter` are
-   * managed server-side (or via tool metadata).
-   *
-   * Each attempt is wrapped in a per-call timeout (`timeoutMs`, default
-   * 30s). On rate-limit errors, retries with exponential backoff up to
-   * `maxRetries` times. Other errors propagate immediately.
-   *
-   * @param token Optional `ChatParticipantToolToken` from the originating
-   *   chat request. When provided, VS Code treats the call as
-   *   user-authorised and skips the confirmation modal.
+   * Parse a Server-Sent Events response from the MCP server.
+   * Extracts the JSON-RPC response from the `data:` lines.
+   */
+  private async parseSseResponse(
+    response: Response,
+  ): Promise<string> {
+    const text = await response.text();
+    // SSE format: lines starting with "data:" contain JSON
+    const dataLines = text
+      .split("\n")
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trim());
+
+    // Find the JSON-RPC response (has "result" or "error")
+    for (const line of dataLines) {
+      try {
+        const parsed = JSON.parse(line);
+        if (parsed.result || parsed.error) {
+          return line;
+        }
+      } catch {
+        // Not JSON, skip
+      }
+    }
+    // Fallback: return the raw text
+    return text;
+  }
+
+  /**
+   * Call the Web Search MCP tool.
+   * Retries with exponential backoff on rate-limit errors.
    */
   async webSearch(
     query: string,
     count = 10,
-    token?: vscode.ChatParticipantToolToken,
-    maxRetries = 2,
+    _token?: vscode.ChatParticipantToolToken,
+    maxRetries = DEFAULT_RETRY_COUNT,
     timeoutMs = DEFAULT_TIMEOUT_MS,
   ): Promise<ZaiSearchResult[]> {
-    const toolName = this.resolveToolName(this.options.webSearchToolName);
-    if (!toolName) {
-      throw new Error(
-        `Z.AI Web Search tool ('${this.options.webSearchToolName}') is not available. ` +
-          "Make sure the MCP servers are connected (check the MCP view in VS Code).",
-      );
-    }
-
     let attempt = 0;
     while (true) {
       attempt++;
       this.log(
-        `invoking ${toolName} (search_query="${query}", count=${count}, attempt=${attempt})`,
+        `webSearch (search_query="${query}", count=${count}, attempt=${attempt})`,
       );
       try {
-        const result = await withTimeout(
-          vscode.lm.invokeTool(toolName, {
-            input: buildWebSearchInput(query, count),
-            toolInvocationToken: token,
-          }),
+        const raw = await this.callMcpTool(
+          MCP_WEB_SEARCH_URL,
+          this.options.webSearchToolName,
+          buildWebSearchInput(query, count),
           timeoutMs,
           `webSearch("${query.slice(0, 60)}")`,
         );
-        return this.parseSearchResult(result);
+
+        if (isRateLimitError(raw)) {
+          throw new RateLimitError("Rate limit reached", raw);
+        }
+
+        const results = extractSearchResults(raw);
+        if (results.length === 0) {
+          this.log(
+            `webSearch: 0 results. First 200 chars: ${raw.slice(0, 200).replace(/\s+/g, " ")}`,
+          );
+        }
+        return results;
       } catch (error) {
         if (error instanceof TimeoutError) {
-          this.log(
-            `Timeout (${timeoutMs}ms) for search "${query}" — giving up on this query`,
-          );
-          return []; // fail-soft: a hung query must not block the whole run
+          this.log(`Timeout (${timeoutMs}ms) for search "${query}" — skipping`);
+          return [];
         }
         if (error instanceof RateLimitError && attempt <= maxRetries) {
-          const delayMs = BASE_BACKOFF_MS * Math.pow(2, attempt - 1); // 1s, 2s, 4s
+          const delayMs = BASE_BACKOFF_MS * Math.pow(2, attempt - 1);
           this.log(
             `Rate limit hit for "${query}", backing off ${delayMs}ms (attempt ${attempt}/${maxRetries})`,
           );
@@ -179,132 +210,44 @@ export class McpToolInvoker {
   }
 
   /**
-   * Call the Web Reader MCP tool. Expects `url` (required) and
-   * `return_format` (markdown | text, optional).
-   *
-   * Wrapped in a per-call timeout (default 30s). On timeout, returns a
-   * stub result with the URL so the orchestrator can continue.
-   *
-   * @param token Optional chat token; see {@link webSearch}.
+   * Call the Web Reader MCP tool.
+   * Returns a stub on timeout so the orchestrator can continue.
    */
   async webRead(
     url: string,
     format: "markdown" | "text" = "markdown",
-    token?: vscode.ChatParticipantToolToken,
+    _token?: vscode.ChatParticipantToolToken,
     timeoutMs = DEFAULT_TIMEOUT_MS,
   ): Promise<ZaiReadResult> {
-    const toolName = this.resolveToolName(this.options.webReaderToolName);
-    if (!toolName) {
-      throw new Error(
-        `Z.AI Web Reader tool ('${this.options.webReaderToolName}') is not available. ` +
-          "Make sure the MCP servers are connected (check the MCP view in VS Code).",
-      );
-    }
-
-    this.log(`invoking ${toolName} (url=${url}, format=${format})`);
-
+    this.log(`webRead (url=${url}, format=${format})`);
     try {
-      const result = await withTimeout(
-        vscode.lm.invokeTool(toolName, {
-          input: buildWebReadInput(url, format),
-          toolInvocationToken: token,
-        }),
+      const raw = await this.callMcpTool(
+        MCP_WEB_READER_URL,
+        this.options.webReaderToolName,
+        buildWebReadInput(url, format),
         timeoutMs,
         `webRead("${url.slice(0, 80)}")`,
       );
-      return this.parseReadResult(result, url);
+      return extractReadResult(raw, url);
     } catch (error) {
       if (error instanceof TimeoutError) {
-        this.log(
-          `Timeout (${timeoutMs}ms) for read ${url} — returning stub`,
-        );
-        return { url, content: "" }; // fail-soft: empty content, not a crash
+        this.log(`Timeout (${timeoutMs}ms) for read ${url} — returning stub`);
+        return { url, content: "" };
       }
       throw error;
     }
   }
 
-  /** Test whether both MCP tools are currently available. */
-  isReady(): boolean {
-    const searchName = this.resolveToolName(this.options.webSearchToolName);
-    const readerName = this.resolveToolName(this.options.webReaderToolName);
-    const ready = searchName !== undefined && readerName !== undefined;
-    if (!ready) {
-      const available = this.listAvailableTools();
-      this.log(
-        `MCP tools not ready. Looking for: "${this.options.webSearchToolName}", ` +
-          `"${this.options.webReaderToolName}". ` +
-          `Resolved: search=${searchName ?? "—"}, reader=${readerName ?? "—"}. ` +
-          `Available tools (${available.length}): ${available.join(", ") || "(none)"}`,
-      );
-    }
-    return ready;
-  }
-
-  // ---- parsers ----------------------------------------------------------
-
   /**
-   * Defensive parser for the MCP web search result. The MCP server returns
-   * its payload inside the standard `LanguageModelToolResult.content`
-   * array. We delegate to the pure parser in `mcpResponseParser.ts` and
-   * log the raw text for diagnosis if nothing was extracted.
-   *
-   * Throws {@link RateLimitError} if the response indicates the Z.AI
-   * rate limit was hit (HTTP 429 / error code 1302). The caller is
-   * expected to retry with backoff.
+   * Check if the MCP tools are ready (API key is set).
+   * No longer checks `vscode.lm.tools` since we call HTTP directly.
    */
-  private parseSearchResult(result: vscode.LanguageModelToolResult): ZaiSearchResult[] {
-    const texts = this.collectTextParts(result);
-    for (const text of texts) {
-      if (isRateLimitError(text)) {
-        throw new RateLimitError("Z.AI MCP search: rate limit reached", text);
-      }
-      const got = extractSearchResults(text);
-      if (got.length > 0) return got;
+  async isReady(): Promise<boolean> {
+    try {
+      await this.getApiKey();
+      return true;
+    } catch {
+      return false;
     }
-    if (texts.length > 0) {
-      this.log(
-        `parseSearchResult: 0 results from ${texts.length} text part(s). ` +
-          `First 200 chars: ${texts[0].slice(0, 200).replace(/\s+/g, " ")}`,
-      );
-    } else {
-      this.log(`parseSearchResult: no text parts in result content`);
-    }
-    return [];
-  }
-
-  /**
-   * Defensive parser for the MCP web reader result. Falls back to the raw
-   * text body if no JSON structure is recognised.
-   */
-  private parseReadResult(
-    result: vscode.LanguageModelToolResult,
-    requestedUrl: string,
-  ): ZaiReadResult {
-    const texts = this.collectTextParts(result);
-    for (const text of texts) {
-      const got = extractReadResult(text, requestedUrl);
-      if (got.content) return got;
-    }
-    // Fallback: return the raw first text as the body.
-    if (texts.length > 0) {
-      return { url: requestedUrl, content: texts[0] };
-    }
-    return { url: requestedUrl, content: "" };
-  }
-
-  /** Pull every text segment out of a `LanguageModelToolResult`. */
-  private collectTextParts(result: vscode.LanguageModelToolResult): string[] {
-    const out: string[] = [];
-    for (const part of result.content) {
-      if (part instanceof vscode.LanguageModelTextPart) {
-        out.push(part.value);
-      }
-    }
-    return out;
   }
 }
-
-// Re-export for convenience so existing `import { RateLimitError } from
-// "./mcpTools"` continues to work.
-export { RateLimitError } from "./mcpRateLimit";

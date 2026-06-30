@@ -65,10 +65,6 @@
       {
         "command": "zai.toggleQuotaView",
         "title": "Z.AI: Toggle Quota View"
-      },
-      {
-        "command": "zai.setupMcp",
-        "title": "Z.AI: Setup MCP Servers"
       }
     ],
     "configuration": {

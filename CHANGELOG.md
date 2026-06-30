@@ -2,6 +2,55 @@
 
 All notable changes to the **Z.AI Copilot Chat** extension are documented here.
 
+## 0.3.1 — 2026-06-27
+
+### Fixed (critical — MCP tools leaked to Copilot Agent)
+
+This release fixes a critical regression where Z.AI's MCP tools (`web_search_prime`, `webReader`) were visible to **all** Copilot Agent sessions, not just `@z-research`. When the user asked Copilot Agent to do research in a normal chat, the agent auto-discovered the tools, spawned sub-agents to invoke them, and got stuck on slow MCP calls.
+
+**What was broken (v0.3.0):**
+
+1. **Global `mcp.json` entries** — The `Z.AI: Setup MCP Servers` command wrote `zai-web-search-prime` and `zai-web-reader` to the user's global `mcp.json`. VS Code's tool infrastructure discovers all servers in `mcp.json` and makes them available to every chat participant, including the default Copilot Agent.
+
+2. **`mcpServerDefinitionProvider` (intermediate attempt)** — The first fix attempt replaced `mcp.json` with a scoped `vscode.lm.registerMcpServerDefinitionProvider`. However, **any** MCP registration — whether via `mcp.json` or via the API — makes the tools discoverable by VS Code's tool infrastructure. There is no "register but hide from Agent" mode. Copilot Agent still auto-discovered and invoked the tools.
+
+**The fix — direct HTTP, zero VS Code MCP registration:**
+
+`McpToolInvoker` now calls the Z.AI Streamable HTTP MCP endpoints **directly via `fetch()`**, completely bypassing VS Code's MCP tool infrastructure:
+
+```
+POST https://api.z.ai/api/mcp/web_search_prime/mcp
+Content-Type: application/json
+Authorization: Bearer <api-key from SecretStorage>
+
+{"jsonrpc":"2.0","method":"tools/call","params":{"name":"web_search_prime","arguments":{...}}}
+```
+
+The tools are now **completely invisible** to VS Code's tool infrastructure. Only `@z-research` can invoke them. Regular Copilot Agent chat is 100% unaffected — no sub-agents, no stuck sessions.
+
+**What was removed:**
+- `Z.AI: Setup MCP Servers` command (no longer writes `mcp.json`)
+- `contributes.mcpServerDefinitionProviders` in `package.json`
+- `vscode.lm.registerMcpServerDefinitionProvider` in `index.ts`
+- `vscode.lm.invokeTool` and `vscode.lm.tools` in `mcpTools.ts`
+- `toolInvocationToken` threading through the orchestrator (no longer needed)
+- `resolveToolName()` fuzzy matching (no longer needed — tool names are static)
+- `listAvailableTools()` method (no VS Code tool list to query)
+- `mcpToolNameResolver.ts` is now dead code (kept for historical reference)
+
+**What was changed:**
+- `McpToolInvoker.webSearch()` and `webRead()` now call `fetch()` directly
+- `McpToolInvoker.isReady()` is now `async` — checks API key in SecretStorage instead of `vscode.lm.tools`
+- `McpToolInvokerOptions` requires a `secrets: vscode.SecretStorage` field
+- SSE response parsing for `text/event-stream` responses (Streamable HTTP transport)
+- `researchParticipant.ts` updated for async `isReady()` and simpler error message
+
+### Migration
+- If you previously ran `Z.AI: Setup MCP Servers`, remove the `zai-web-search-prime` and `zai-web-reader` entries from your `~/Library/Application Support/Code/User/mcp.json` (macOS), `%APPDATA%\Code\User\mcp.json` (Windows), or `~/.config/Code/User/mcp.json` (Linux). The extension now calls the Z.AI MCP HTTP endpoints directly — these servers no longer need to be in the global config.
+
+### Lesson learned
+**VS Code MCP infrastructure is globally discoverable.** There is no way to register an MCP server that is visible to one chat participant but hidden from another. If you need scoped MCP tools (only invocable by your extension, not by Copilot Agent), you must call the MCP server's HTTP endpoint directly via `fetch()` and bypass `vscode.lm` entirely.
+
 ## 0.3.0 — 2026-06-26
 
 ### Added

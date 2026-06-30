@@ -25,8 +25,9 @@
 12. [Phase 7 — Polish & Performance (3 optimization passes)](#12-phase-7--polish--performance-3-optimization-passes)
 13. [Phase 8 — Prompt Quality](#13-phase-8--prompt-quality)
 14. [Phase 9 — Post-Ship Regression](#14-phase-9--post-ship-regression)
-15. [Updated Bug Log — 25 Production Bugs Fixed](#15-updated-bug-log--25-production-bugs-fixed)
-16. [Updated Lessons Learned (L1–L18)](#16-updated-lessons-learned-l1l18)
+15. [Phase 10 — MCP Scoping Crisis (direct HTTP)](#15-phase-10--mcp-scoping-crisis-direct-http)
+16. [Updated Bug Log — 28 Production Bugs Fixed](#16-updated-bug-log--28-production-bugs-fixed)
+17. [Updated Lessons Learned (L1–L20)](#17-updated-lessons-learned-l1l20)
 
 ---
 
@@ -688,7 +689,53 @@ The 10 bugs from §8 plus 12 more from Phases 6-8, plus 3 more from Phase 9:
 
 ---
 
-## 16. Updated Lessons Learned (L1–L18)
+## 15. Phase 10 — MCP Scoping Crisis (direct HTTP)
+
+After Phase 9's regressions were fixed, a final critical issue was discovered: **the Z.AI MCP tools were leaking into regular Copilot Agent chat**. When the user asked Copilot Agent to do research in a normal chat (without `@z-research`), the agent auto-discovered `web_search_prime`, spawned a sub-agent to invoke it, and got stuck.
+
+### Three attempts — only the third worked
+
+**Attempt 1 (v0.3.0):** `Z.AI: Setup MCP Servers` command wrote to global `mcp.json`. **Result:** tools visible to all chat participants. Copilot Agent picked them up. **Failed.**
+
+**Attempt 2 (v0.3.1-rc1):** Replaced `mcp.json` with `vscode.lm.registerMcpServerDefinitionProvider`. **Result:** still visible to VS Code tool infrastructure. Copilot Agent still discovered and invoked them. **Failed.**
+
+**Attempt 3 (v0.3.1 final):** Removed ALL VS Code MCP registration. `McpToolInvoker` now calls the Z.AI Streamable HTTP MCP endpoints directly via `fetch()`. **Result:** tools completely invisible to VS Code. Only `@z-research` can invoke them. **Success.**
+
+### The key lesson
+
+**VS Code MCP infrastructure is globally discoverable.** There is no way to register an MCP server that is visible to one chat participant but hidden from another. `mcp.json`, `mcpServerDefinitionProvider`, and `languageModelTools` all feed into the same global tool list that Copilot Agent auto-discovers.
+
+If you need scoped MCP tools (only invocable by your extension, not by Copilot Agent), you must **call the MCP server's HTTP endpoint directly via `fetch()`** and bypass `vscode.lm` entirely.
+
+### What was removed in Attempt 3
+
+- `Z.AI: Setup MCP Servers` command
+- `contributes.mcpServerDefinitionProviders` in `package.json`
+- `vscode.lm.registerMcpServerDefinitionProvider` in `index.ts`
+- `vscode.lm.invokeTool` and `vscode.lm.tools` in `mcpTools.ts`
+- `toolInvocationToken` threading through the orchestrator
+- `resolveToolName()` fuzzy matching (tool names are now static)
+- `listAvailableTools()` method
+
+### What replaced it
+
+`McpToolInvoker` now sends JSON-RPC 2.0 `tools/call` requests directly to the Z.AI MCP HTTP endpoints:
+
+```
+POST https://api.z.ai/api/mcp/web_search_prime/mcp
+Content-Type: application/json
+Authorization: Bearer <api-key>
+
+{"jsonrpc":"2.0","method":"tools/call","params":{"name":"web_search_prime","arguments":{"search_query":"...","count":15}}}
+```
+
+The response is either `application/json` or `text/event-stream` (SSE). The `parseSseResponse()` helper extracts the JSON-RPC result from SSE `data:` lines.
+
+---
+
+## 16. Updated Bug Log — 28 Production Bugs Fixed
+
+The 10 bugs from §8 plus 12 more from Phases 6-8, plus 3 more from Phase 9, plus 3 more from Phase 10:
 
 ### 🎯 L1 — Always ask the user's plan tier before integrating a metered API
 **Source:** Bug 2 (-1113 "Insufficient balance")
@@ -770,6 +817,30 @@ For simple utilities (concurrency limiter, URL normalizer), inlining is the clea
 ### 🎯 L18 — Uninstall before reinstall; full restart, not Reload Window
 **Source:** Bug 25 (Phase 9 — `--force` did not refresh)
 **Insight:** VS Code's extension host caches loaded extensions and refuses to overwrite a running extension even with `--force`. Always `--uninstall-extension` first, then `--install-extension`. After reinstalling an extension that was already active, require a **full VS Code restart** (`Cmd+Q` on macOS, not just "Developer: Reload Window"). Reload Window reuses the same extension host process and may keep the old code in memory.
+
+### 🎯 L19 — VS Code MCP infrastructure is globally discoverable; there is no "scoped" MCP
+**Source:** Bugs 26, 27 (Phase 10 — MCP tools leaked to Copilot Agent)
+**Insight:** This is the most important architectural lesson of the entire project. Three approaches were tried to make MCP tools available only to `@z-research`:
+1. Global `mcp.json` → tools visible to ALL participants ❌
+2. `mcpServerDefinitionProvider` → tools still visible to ALL participants ❌
+3. Direct HTTP `fetch()` → tools invisible to VS Code ✅
+
+**VS Code's tool infrastructure auto-discovers ALL registered MCP servers** — whether from `mcp.json`, from `mcpServerDefinitionProvider`, or from `languageModelTools`. There is no API to register a server "for one participant only". If you need scoped tools:
+- Call the MCP server's HTTP endpoint directly via `fetch()`
+- Do NOT use `vscode.lm.invokeTool`, `vscode.lm.tools`, or `registerMcpServerDefinitionProvider`
+- The tools will be completely invisible to VS Code's tool infrastructure
+- Only your extension code can invoke them
+
+### 🎯 L20 — Streamable HTTP MCP protocol is simple enough to call directly
+**Source:** Phase 10 (direct HTTP implementation)
+**Insight:** The Z.AI MCP servers use the Streamable HTTP transport, which is just:
+- `POST` to the server URL
+- `Content-Type: application/json`
+- `Authorization: Bearer <key>`
+- Body: JSON-RPC 2.0 `{"jsonrpc":"2.0","method":"tools/call","params":{"name":"...","arguments":{...}}}`
+- Response: `application/json` OR `text/event-stream` (SSE with `data:` lines)
+
+No SDK needed. A `fetch()` call + SSE parser (~20 lines) is enough. This is preferable to `vscode.lm.invokeTool` when you need to keep the tools invisible to VS Code's tool infrastructure.
 
 ---
 
