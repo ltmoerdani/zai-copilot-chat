@@ -2,6 +2,26 @@
 
 All notable changes to the **Z.AI Copilot Chat** extension are documented here.
 
+## 0.3.2 — 2026-07-04
+
+### Changed (marketplace SEO + README polish)
+
+- **`displayName`** — now pain-first with model count and hook: `"Z.AI Copilot Chat: BYOK 13+ GLM Models"`.
+- **`description`** — rewritten to follow the `[Action] [N] models ([brands]) in [tool]. [Hook]` formula. Now leads with GLM-5.2 1M context, GLM-4.7, free Flash + Vision, and the `@z-research` agent.
+- **`keywords`** — expanded from 13 to 32. Added brand-model keywords (`glm-5.2`, `glm-4.7`, `glm-5`, `glm-4.6`, `glm-4.5`, `zhipu`), pain keywords (`free-models`, `free-tier`, `byok`, `bring-your-own-key`), trend keywords (`reasoning`, `thinking`, `agent`, `vision`, `coding-agent`, `1m-context`), and tool keywords (`copilot-chat`, `language-models`, `openai-compatible`).
+- **`tags`** — added `["language-models"]` so the extension appears in the `@tag:language-models` search from the [VS Code BYOK blog](https://code.visualstudio.com/blogs/2026/06/18/byok-vscode).
+- **`categories`** — expanded from `["AI"]` to `["AI", "Machine Learning", "Education", "Other"]` for broader marketplace visibility.
+
+### Added (README)
+
+- Centered header with emoji, value proposition subtitle, and nav links (Why → Quick Start → Models → Compare → FAQ → Community).
+- Badges row: License, VS Code, Z.AI, Models count, Free Tier.
+- **"The pitch"** blockquote — pain-first elevator pitch.
+- **"Why bother"** feature matrix table with emoji + concrete pricing.
+- **"GitHub Copilot vs This Extension"** comparison table (Copilot Free / Pro / Pro+ / This Extension) — social proof + economic value.
+- **FAQ** section — 6 objection-handling Q&As (Copilot Pro needed? official? free? web search difference? agent mode? standalone use?).
+- **Community** section — issue/PR links, star CTA, marketplace review CTA, cross-promotion to OpenCode Copilot Chat.
+
 ## 0.3.1 — 2026-06-27
 
 ### Fixed (critical — MCP tools leaked to Copilot Agent)

@@ -1,12 +1,26 @@
-# Z.AI for GitHub Copilot Chat
+<div align="center">
 
-> **Copilot Chat, but you pick the brain. Bring your own Z.AI API key and chat with GLM-5.2, GLM-4.7, and friends inside the editor you already use.**
+# 🧠 Z.AI for GitHub Copilot Chat
+
+### Use **13+ Z.AI GLM models** (GLM-5.2 1M context, GLM-4.7, free Flash + Vision) in GitHub Copilot Chat — **no Copilot Pro needed**
+
+**BYOK • Free tier included • Deep-research agent built in**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![VS Code](https://img.shields.io/badge/VS%20Code-1.120%2B-blue)](https://code.visualstudio.com/)
-[![Z.AI](https://img.shields.io/badge/Z.AI-GLM-4f46e5)](https://z.ai)
+[![Z.AI](https://img.shields.io/badge/Z.AI-GLM-5.2-4f46e5)](https://z.ai)
+[![Models](https://img.shields.io/badge/Models-13%2B-22c55e)](#-models)
+[![Free Tier](https://img.shields.io/badge/Free%20Tier-Included-success)](#-models)
 
-You already love Copilot Chat. Now imagine it powered by Z.AI's GLM models: a 1M‑context flagship, a free Flash tier, vision models that read screenshots, and a built‑in deep‑research agent that hands you a cited report. That is what this extension does. One API key, no Copilot Pro subscription, no second editor to install.
+**[Why bother](#-why-bother)** · **[Quick Start](#-quick-start)** · **[Models](#-models)** · **[Copilot vs This](#-github-copilot-vs-this-extension)** · **[Deep Research](#-deep-research)** · **[FAQ](#-faq)** · **[Community](#-community)**
+
+</div>
+
+---
+
+> ### 💡 The pitch
+>
+> **GitHub Copilot Chat is great, but you're locked to the models GitHub picks for you.** This extension lets you bring your own Z.AI API key and chat with GLM-5.2 (1M context), GLM-4.7, GLM-5, plus free Flash and Vision models — right inside the Copilot Chat you already use. No Copilot Pro subscription, no second editor. There's also a `@z-research` agent that fetches dozens of cited sources and writes you a report.
 
 ```mermaid
 flowchart LR
@@ -16,13 +30,38 @@ flowchart LR
     D -->|"streamed reply"| B
 ```
 
-### Why you might care
+## 🔥 Why bother
 
-- **Skip the Copilot Pro paywall.** If you have a Z.AI key and a free GitHub account, you can chat.
-- **Try a 1M‑context model.** GLM-5.2 holds roughly 1 million tokens. Paste an entire repo, a long spec, a book chapter, and ask anything.
-- **Get a real research assistant.** Type `@z-research <topic>` and the extension runs a multi‑source search, reads the top pages, ranks them, and writes a cited markdown report. Not 2 links. Dozens.
-- **Free tier included.** `glm-4.5-flash` and `glm-4.6v-flash` are free on Z.AI, so you can try the whole thing without spending a cent.
-- **It is open source.** MIT, readable code, contributions welcome.
+You already love Copilot Chat. Now imagine it powered by Z.AI's GLM models — a 1M-context flagship, a free Flash tier, vision models that read screenshots, and a built-in deep-research agent that hands you a cited report.
+
+| | What you get |
+|---|---|
+| 💸 **Cost** | Free GitHub account + Z.AI API key. No Copilot Pro ($10/mo) or Pro+ ($39/mo) needed |
+| 🌍 **Models** | 13+ GLM models: GLM-5.2, GLM-5.1, GLM-5, GLM-4.7, GLM-4.6, GLM-4.5, Air, AirX |
+| 🤖 **Agent Mode** | `@z-research` deep-research agent with dozens of cited sources |
+| 🧠 **1M context** | GLM-5.2 holds ~1 million tokens — paste an entire repo or a book chapter |
+| 👁️ **Vision** | GLM-5V-Turbo, GLM-4.6V, GLM-4.6V-Flash read screenshots and diagrams |
+| 🆓 **Free models** | `glm-4.5-flash` (text) and `glm-4.6v-flash` (vision) are $0 on Z.AI |
+| 🔒 **Key storage** | Your API key is stored in VS Code SecretStorage, never sent anywhere but Z.AI |
+| 🔓 **Open source** | MIT, readable code, contributions welcome |
+
+---
+
+## 📊 GitHub Copilot vs This Extension
+
+> **Not a replacement** — this extension *adds* models *into* Copilot Chat. Think of it as unlocking the model picker.
+
+| | Copilot Free | Copilot Pro ($10/mo) | Copilot Pro+ ($39/mo) | **This Extension (BYOK)** |
+|---|:---:|:---:|:---:|:---:|
+| GLM-5.2 (1M context) | ❌ | ❌ | ❌ | ✅ |
+| GLM-4.7 / GLM-5 / GLM-5.1 | ❌ | ❌ | ❌ | ✅ |
+| Vision models (GLM-4.6V) | ❌ | ❌ | ❌ | ✅ |
+| Free tier (Flash models) | ❌ | ❌ | ❌ | ✅ $0 |
+| Deep-research agent (`@z-research`) | ❌ | ❌ | ❌ | ✅ |
+| GPT-5 / Claude / Gemini | ❌ | ✅ | ✅ | ❌ (use Copilot's own models) |
+| Monthly cost | $0 | $10 | $39 | $0 + Z.AI usage |
+
+You pay Z.AI per-token (or use the free Flash models). No middleman subscription.
 
 ---
 
@@ -390,6 +429,47 @@ npm test
 ```
 
 The `npm test` runner covers 9 `vscode`-free pure modules: `mcpInputBuilders` (5), `mcpResponseParser` (15), `mcpRateLimit` (6), `mcpTimeout` (5), `mcpToolNameResolver` (9), `junkUrlFilter` (10), `ranker` (5), `budget` (5), `cache` (5), plus URL dedup (5). **75 tests, 100% pass rate, runs in ~600ms.**
+
+---
+
+## ❓ FAQ
+
+### Do I need Copilot Pro?
+
+No. A free GitHub account is enough. Copilot Chat itself is free to use, and this extension adds Z.AI models into it via the Language Model Chat Provider API. You only pay for Z.AI API usage (or use the free Flash models).
+
+### Is this an official Z.AI or GitHub extension?
+
+No. This is an independent, open-source project. Z.AI and GitHub Copilot are not affiliated with this extension. It uses their public APIs.
+
+### Do the models work with Copilot Agent / tool calling?
+
+Yes. Tool schemas are forwarded using OpenAI-compatible chat completions, so agents and tool calling keep working.
+
+### Is it really free?
+
+The extension is free and open source (MIT). Z.AI offers `glm-4.5-flash` (text) and `glm-4.6v-flash` (vision) for **$0**. Other models are pay-per-token. Check [z.ai](https://z.ai) for current pricing.
+
+### What's the difference between this and Copilot's built-in web search?
+
+Copilot's built-in search returns 2–3 links. The `@z-research` participant runs a multi-iteration loop that fetches 20–100+ sources, reads them, ranks by BM25 + recency, and writes a cited markdown report. It's a different class of research.
+
+### Can I use this without Copilot Chat?
+
+No. This extension only adds models *into* GitHub Copilot Chat. You need the [Copilot Chat extension](https://marketplace.visualstudio.com/items?itemName=GitHub.copilot-chat) installed and signed in.
+
+---
+
+## 💬 Community
+
+- **Found a bug or have a feature idea?** [Open an issue](https://github.com/ltmoerdani/zai-copilot-chat/issues)
+- **Want to contribute?** [Pull requests welcome](https://github.com/ltmoerdani/zai-copilot-chat/pulls) — see [Contributing](#contributing) below
+- **Star the repo** ⭐ if this saved you a subscription or a research afternoon. Word of mouth is how side projects reach the people who need them.
+- **Leave a review** on the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=ltmoerdani.zai-copilot-chat) — it helps others find the extension.
+
+### 🪶 Also from this publisher
+
+Looking for **OpenCode Zen / Go** models (DeepSeek, Kimi, Qwen, MiMo, MiniMax) in Copilot Chat? Check out [**OpenCode Copilot Chat**](https://marketplace.visualstudio.com/items?itemName=ltmoerdani.opencode-copilot-chat) — 5,000+ installs, 30+ models.
 
 ---
 

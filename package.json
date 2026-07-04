@@ -1,8 +1,8 @@
 {
   "name": "zai-copilot-chat",
-  "displayName": "Z.AI Copilot Chat",
-  "description": "Bring your own Z.AI API key to VS Code Copilot Chat. Adds Z.AI GLM models through the Language Model Chat Provider API, plus a `@z-research` deep-research chat participant that fetches hundreds of cited sources via Z.AI's MCP Web Search + Web Reader servers.",
-  "version": "0.3.1",
+  "displayName": "Z.AI Copilot Chat: BYOK 13+ GLM Models",
+  "description": "Use 13+ Z.AI GLM models (GLM-5.2 1M context, GLM-4.7, GLM-5, free Flash + Vision models) in GitHub Copilot Chat. BYOK, no Copilot Pro needed. Includes @z-research deep-research agent.",
+  "version": "0.3.2",
   "publisher": "ltmoerdani",
   "license": "MIT",
   "icon": "media/zai.png",
@@ -14,16 +14,38 @@
     "zai",
     "zai-copilot-chat",
     "copilot",
+    "copilot-chat",
     "byok",
+    "bring-your-own-key",
     "ai",
-    "language model",
+    "language-model",
+    "language-models",
     "glm",
+    "glm-5.2",
+    "glm-4.7",
+    "glm-5",
+    "glm-4.6",
+    "glm-4.5",
+    "zhipu",
     "llm",
     "chat",
     "mcp",
     "web-search",
     "deep-research",
-    "research"
+    "research",
+    "agent",
+    "reasoning",
+    "thinking",
+    "vision",
+    "free-models",
+    "free-tier",
+    "coding-agent",
+    "1m-context",
+    "openai-compatible",
+    "opensource"
+  ],
+  "tags": [
+    "language-models"
   ],
   "repository": {
     "type": "git",
@@ -37,7 +59,10 @@
     "vscode": "^1.118.0"
   },
   "categories": [
-    "AI"
+    "AI",
+    "Machine Learning",
+    "Education",
+    "Other"
   ],
   "activationEvents": [
     "onStartupFinished",
