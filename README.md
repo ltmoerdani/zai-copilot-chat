@@ -279,6 +279,18 @@ The quota is fetched from `https://api.z.ai/api/monitor/usage/quota/limit` and a
 
 ## Troubleshooting
 
+### "No utility model is configured for 'copilot-utility-small'"
+
+This is a **VS Code 1.128 behavior change**. When a BYOK model is set as the main agent, VS Code no longer falls back to a Copilot-provided utility model for background tasks (chat titles, commit messages, intent detection).
+
+**The extension fixes this automatically.** On VS Code 1.128+, if no utility model is configured, the extension sets `chat.byokUtilityModelDefault = "mainAgent"` in your global settings on first activation and shows a brief toast to confirm. No manual action needed.
+
+If you still see the error (for example, after resetting settings), reload the VS Code window (`Cmd+Shift+P` → **Reload Window**) to let the extension re-apply the fix.
+
+If you want to configure a different model for utility tasks, set `chat.utilitySmallModel` or `chat.utilityModel` manually — the extension won't overwrite an explicit configuration.
+
+> **Full patch notes:** [`doc/vscode-128-byok-utility-model.md`](./doc/vscode-128-byok-utility-model.md) — root cause analysis, failed attempts, verified enum values, and code walkthrough.
+
 ### "Request timed out for glm-5.1" / "Connection timed out after …"
 
 Flagship 200K-context models (`glm-5.1`, `glm-5`, `glm-5-turbo`, `glm-4.7`) have noticeably higher cold-start latency than the smaller models. On long or busy sessions they can take 60 to 120s to send the **first token**.

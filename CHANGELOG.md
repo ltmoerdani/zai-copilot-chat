@@ -2,6 +2,14 @@
 
 All notable changes to the **Z.AI Copilot Chat** extension are documented here.
 
+## 0.3.3 — 2026-07-08
+
+### Fixed
+
+- **VS Code 1.128 utility model auto-fix** — VS Code 1.128 changed the default behavior for BYOK models: background utility flows (chat title generation, commit messages, intent detection) no longer fall back to a Copilot-provided utility model automatically. When neither `chat.byokUtilityModelDefault` nor `chat.utilitySmallModel` is configured, VS Code shows `"No utility model is configured for 'copilot-utility-small' while the selected main agent model is BYOK"`. The extension now **automatically sets** `chat.byokUtilityModelDefault = "mainAgent"` globally on VS Code 1.128+ if no utility model is already configured, so background tasks use the Z.AI BYOK model. A one-time toast confirms what was changed. Existing explicit configurations are never overwritten.
+
+- **Duplicate research participant registration** — `registerResearchFeatures(context)` was accidentally called twice in `activate()`, registering the `@z-research` participant and its output channel twice. Fixed to a single call.
+
 ## 0.3.2 — 2026-07-04
 
 ### Changed (marketplace SEO + README polish)

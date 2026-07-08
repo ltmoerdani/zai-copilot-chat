@@ -227,11 +227,64 @@ export function activate(context: vscode.ExtensionContext) {
   void provider.refreshQuotaFromSecret();
   setupQuotaRefreshTimer(context);
 
-  // Register Z.AI deep research features (@z-research participant + MCP setup command).
+  // Register Z.AI deep research features (@z-research participant + direct HTTP MCP).
   registerResearchFeatures(context);
 
-  // Register Z.AI deep research features (@z-research participant + MCP setup command).
-  registerResearchFeatures(context);
+  // VS Code 1.128 changed BYOK utility model defaults — show a one-time notice if not configured.
+  checkUtilityModelConfiguration(context);
+}
+
+/**
+ * VS Code 1.128 changed the default behavior for BYOK models: background
+ * utility flows (chat title generation, commit messages, intent detection)
+ * no longer fall back to a Copilot-provided model when BYOK is the main
+ * agent. If neither `chat.utilitySmallModel` nor `chat.byokUtilityModelDefault`
+ * is configured, VS Code shows:
+ *   "No utility model is configured for 'copilot-utility-small' while the
+ *    selected main agent model is BYOK."
+ *
+ * This function auto-fixes the setting on behalf of the user: it sets
+ * `chat.byokUtilityModelDefault` to "mainAgent" so that VS Code reuses the
+ * Z.AI BYOK model for all background utility tasks. A brief toast is shown
+ * once to inform the user what was changed.
+ *
+ * Valid enum values (extracted from VS Code 1.128 desktop bundle):
+ *   "none" (default) | "mainAgent" | "copilot"
+ */
+function checkUtilityModelConfiguration(context: vscode.ExtensionContext): void {
+  const [major, minor] = vscode.version.split(".").map(Number);
+  if (major < 1 || (major === 1 && minor < 128)) return;
+
+  const chat = vscode.workspace.getConfiguration("chat");
+  const byokDefault = chat.get<string>("byokUtilityModelDefault", "");
+  const utilitySmall = chat.get<string>("utilitySmallModel", "");
+  const utilityGeneral = chat.get<string>("utilityModel", "");
+
+  // If any utility model is already explicitly configured, leave it alone.
+  // Note: default value for byokUtilityModelDefault is "none" — treat that
+  // the same as unconfigured so we still apply the auto-fix.
+  const isConfigured =
+    (byokDefault !== "" && byokDefault !== undefined && byokDefault !== "none") ||
+    (utilitySmall !== "" && utilitySmall !== undefined && utilitySmall !== "Default") ||
+    (utilityGeneral !== "" && utilityGeneral !== undefined && utilityGeneral !== "Default");
+  if (isConfigured) return;
+
+  // Auto-fix: write chat.byokUtilityModelDefault = "mainAgent" globally so
+  // VS Code routes utility flows (titles, commit messages, intent) to the
+  // user's Z.AI BYOK model instead of failing with "No utility model configured".
+  // Valid enum values (verified from VS Code 1.128 source): "none" | "mainAgent" | "copilot".
+  void chat
+    .update("byokUtilityModelDefault", "mainAgent", vscode.ConfigurationTarget.Global)
+    .then(() => {
+      // Show the toast once per install so the user knows what changed.
+      const NOTICE_KEY = "zai.utilityModelAutoFixed.v1128";
+      if (context.globalState.get<boolean>(NOTICE_KEY)) return;
+      void context.globalState.update(NOTICE_KEY, true);
+      void vscode.window.showInformationMessage(
+        "Z.AI: Automatically fixed VS Code 1.128 utility model setting. " +
+          "Background tasks (chat titles, commit messages) now use your Z.AI model.",
+      );
+    });
 }
 
 function setupQuotaRefreshTimer(context: vscode.ExtensionContext): void {
