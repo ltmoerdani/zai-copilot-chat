@@ -2,6 +2,43 @@
 
 All notable changes to the **Z.AI Copilot Chat** extension are documented here.
 
+## 0.4.0 — 2026-07-18
+
+### Fixed
+
+- **Diagnostics banner dropped the `setContext` log line** — the first integration test in an isolated `--user-data-dir` environment revealed that the `set 'github.copilot.clientByokEnabled' = true` log line was missing from the activation banner, even though the `setContext` call itself was running. Root cause: the `lines.push(...)` for the setContext result was placed after `channel.appendLine(lines.join("\n"))`, so the line was added to the array after the snapshot had already been flushed. Reordered so the `setContext` block runs before the final `appendLine`. After rebuilding and reinstalling in the fresh env, the line appears in the banner as expected.
+
+### Investigated
+
+- **Z.AI models not appearing in the Copilot Chat model picker on fresh devices** — a user reported that after running `Z.AI: Set API Key` on a second Mac, no Z.AI models appeared in the picker. Investigated by reproducing in an isolated `--user-data-dir` environment. Findings: VS Code's `registerLanguageModelProvider` source (verified in `workbench.desktop.main.js`) requires the vendor id to be present in the `_vendors` map, which is populated **only** from `package.json` `languageModelChatProviders` contributions. Without the declarative contribution, VS Code logs `"Chat model provider uses UNKNOWN vendor zai"` and the programmatic registration silently fails. Conclusion: both paths must coexist — the declarative contribution registers the vendor id, and the programmatic provider supplies the model list. The contribution is **retained**. The root cause on the second Mac was an empty SecretStorage (`zai.apiKey` not set on that machine); SecretStorage is per-device and is not synced by VS Code Settings Sync.
+
+- **Gear icon / "Manage Models…" in the model picker does nothing when clicked** — investigated via VS Code source analysis. The `workbench.action.chat.manage` command has precondition `chatIsEnabled AND (Copilot entitlement OR github.copilot.clientByokEnabled)`. `chatIsEnabled` defaults to `false` and is set to `true` only by GitHub Copilot Chat after the user signs in. On a second device where auth state did not sync, the precondition fails and the gear icon is a silent no-op. The `clientByokEnabled` context key defaults to `true` but is not always set until the Copilot extension first touches the context service.
+
+### Added
+
+- **Activation diagnostics banner** — on activation the extension now writes a one-shot diagnostics block to the `Z.AI` output channel: VS Code version, SecretStorage API key presence/absence, and how many models VS Code reports via `selectChatModels({ vendor: "zai" })` (polled at 0/500/1500 ms because VS Code queries the provider asynchronously). When the API key is missing a user-visible warning toast with a `Set API Key` action button is shown so users know exactly why the picker is empty on a new machine.
+
+- **`provideLanguageModelChatInformation` logging** — the provider now logs to the `Z.AI` output channel when it returns `[]` because the API key is missing, when cancelled, and how many models it advertises to VS Code. Closes the previous blind spot where VS Code silently reported 0 models with no trace.
+
+- **`github.copilot.clientByokEnabled` context key workaround** — when at least one Z.AI model is registered, the extension now explicitly runs `setContext` to set `github.copilot.clientByokEnabled = true`. This satisfies the OR-branch of the `workbench.action.chat.manage` precondition and keeps the gear icon / "Manage Models…" entry in the picker clickable even when the user is not signed in to Copilot (e.g. on a fresh device where Settings Sync did not carry the auth state).
+
+### Documentation
+
+- New section §10 in `doc/vscode-128-byok-utility-model.md` documenting the declarative + programmatic coexistence, the `UNKNOWN vendor` failure mode, and how to use the new activation banner to diagnose "Z.AI missing from picker" reports across devices.
+
+- New section §11 in the same doc with the full VS Code source analysis of the `Manage Models` precondition and the BYOK context key workaround.
+
+- New section §12 in the same doc with the full fresh-env smoke test report (test methodology, 9-row verification matrix, captured activation banner, the bug-discovered-during-test note, files changed, and the final ordered runbook).
+
+- New troubleshooting entry in `README.md` for the "gear icon does nothing" symptom, explaining that the definitive fix is to sign in to GitHub Copilot Chat (free tier is enough).
+
+### Build artifact
+
+```
+zai-copilot-chat-0.4.0.vsix (79 files, 208 KB)
+SHA-256: 5026a005cebc6470d5a3cddd964ad1524ee183083bbe8f6a773d5da251cdcf8f
+```
+
 ## 0.3.3 — 2026-07-08
 
 ### Fixed

@@ -185,6 +185,13 @@ export function activate(context: vscode.ExtensionContext) {
 
   const provider = new ZaiProvider(context);
 
+  // Activation diagnostics — emit a startup banner to the "Z.AI" output channel
+  // so users can verify the provider actually activated and registered. This is
+  // the single most useful trace when Z.AI silently fails to appear in the
+  // Copilot Chat model picker (see doc/vscode-128-byok-utility-model.md §8).
+  // Defer to next tick so it runs after the provider is registered below.
+  queueMicrotask(() => void logActivationDiagnostics(context, provider));
+
   context.subscriptions.push(
     vscode.lm.registerLanguageModelChatProvider(VENDOR, provider),
     vscode.commands.registerCommand("zai.manage", () => provider.manage()),
@@ -232,6 +239,115 @@ export function activate(context: vscode.ExtensionContext) {
 
   // VS Code 1.128 changed BYOK utility model defaults — show a one-time notice if not configured.
   checkUtilityModelConfiguration(context);
+}
+
+/**
+ * Emit a one-shot diagnostics banner to the "Z.AI" output channel right after
+ * activation. Verifies four things that historically cause "Z.AI missing from
+ * the model picker" reports:
+ *   1. Extension activated (this log line proves it).
+ *   2. API key present in SecretStorage (without it, `provideLanguageModelChatInformation`
+ *      returns `[]` and no models show up).
+ *   3. Programmatic provider visible via `vscode.lm.selectChatModels({ vendor: "zai" })`.
+ *   4. No leftover declarative entry in `chatLanguageModels.json` (removed in 0.4.0).
+ *
+ * This is non-fatal diagnostics only — failures are logged but never block activation.
+ */
+async function logActivationDiagnostics(
+  context: vscode.ExtensionContext,
+  provider: ZaiProvider,
+): Promise<void> {
+  try {
+    const channel = vscode.window.createOutputChannel("Z.AI");
+    context.subscriptions.push(channel);
+    const ts = new Date().toISOString();
+    const lines: string[] = [];
+    lines.push(`${ts} === Z.AI activation diagnostics ===`);
+    lines.push(`${ts} [activate] extension activated, vendor="${VENDOR}"`);
+    lines.push(`${ts} [activate] VS Code version: ${vscode.version}`);
+
+    const apiKey = await context.secrets.get(SECRET_KEY);
+    lines.push(
+      `${ts} [activate] SecretStorage "${SECRET_KEY}": ${apiKey ? `present (len=${apiKey.length})` : "MISSING — run 'Z.AI: Set API Key' then reload"}`,
+    );
+
+    // selectChatModels may return [] on the same tick activation runs because
+    // VS Code has not yet queried the provider. Give it a short grace period.
+    let modelCount = 0;
+    for (const delayMs of [0, 500, 1500]) {
+      if (delayMs > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+      }
+      const visible = await vscode.lm.selectChatModels({ vendor: VENDOR });
+      modelCount = visible.length;
+      if (modelCount > 0) break;
+    }
+    lines.push(
+      `${ts} [activate] selectChatModels({ vendor: "${VENDOR}" }): ${modelCount} model(s) visible to VS Code`,
+    );
+    if (modelCount === 0 && apiKey) {
+      lines.push(
+        `${ts} [activate] ⚠ API key is set but VS Code still reports 0 Z.AI models. ` +
+          `This usually means VS Code is holding a stale declarative registration from package.json ` +
+          `contributions (removed in 0.4.0). Run 'Developer: Reload Window' to clear it. ` +
+          `If the issue persists, remove the zai entry from chatLanguageModels.json.`,
+      );
+    }
+
+    // Detect the "gear icon in the model picker is unresponsive" state.
+    // VS Code's `workbench.action.chat.manage` (Manage Language Models) command
+    // has precondition `chatIsEnabled && (entitlement || clientByokEnabled)`.
+    // `chatIsEnabled` is set to true by GitHub Copilot Chat only when the user
+    // is signed in. If Copilot Chat is not signed in (e.g. on a second device
+    // where Settings Sync did not carry the auth state), clicking the gear
+    // icon in the model picker does nothing — there is no popup, no error.
+    //
+    // Workaround: attempt to set `github.copilot.clientByokEnabled` context
+    // key to true. VS Code exposes this via the `setContext` command which
+    // third-party extensions can invoke. This satisfies the OR-branch of the
+    // precondition and unlocks the Manage Models gear icon even when the user
+    // is not signed in to Copilot, as long as they have at least one BYOK
+    // model registered.
+    //
+    // Run this BEFORE flushing `lines` to the output channel so the result
+    // (success or error message) appears in the same activation banner.
+    if (modelCount > 0) {
+      try {
+        await vscode.commands.executeCommand(
+          "setContext",
+          "github.copilot.clientByokEnabled",
+          true,
+        );
+        lines.push(
+          `${ts} [activate] set 'github.copilot.clientByokEnabled' = true (ensures Manage Models gear icon stays clickable for BYOK users who are not signed in to Copilot)`,
+        );
+      } catch (setContextError) {
+        const msg = setContextError instanceof Error ? setContextError.message : String(setContextError);
+        lines.push(`${ts} [activate] could not set 'github.copilot.clientByokEnabled': ${msg}`);
+      }
+    }
+
+    lines.push(`${ts} === end activation diagnostics ===`);
+    channel.appendLine(lines.join("\n"));
+
+    // Surface a user-visible toast ONLY when there is a clear actionable state
+    // (key missing) — silent otherwise to avoid noise.
+    if (!apiKey) {
+      void vscode.window
+        .showWarningMessage(
+          "Z.AI: No API key set. Run 'Z.AI: Set API Key' from the Command Palette to make Z.AI models appear in Copilot Chat.",
+          "Set API Key",
+        )
+        .then((choice) => {
+          if (choice === "Set API Key") {
+            void provider.setApiKey();
+          }
+        });
+    }
+  } catch (error) {
+    // Never let diagnostics crash activation.
+    console.warn("[zai] activation diagnostics failed:", error);
+  }
 }
 
 /**
@@ -897,14 +1013,21 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
     const apiKey = await this.context.secrets.get(SECRET_KEY);
 
     if (!apiKey) {
+      this.log(
+        "provideLanguageModelChatInformation: no API key in SecretStorage — returning [] (Z.AI will NOT appear in the picker). Run 'Z.AI: Set API Key'.",
+      );
       return [];
     }
 
     if (token.isCancellationRequested) {
+      this.log("provideLanguageModelChatInformation: cancelled before fetch.");
       return [];
     }
 
     const models = await this.fetchModels(apiKey);
+    this.log(
+      `provideLanguageModelChatInformation: advertising ${models.length} model(s) to VS Code [${models.slice(0, 3).join(", ")}${models.length > 3 ? ", …" : ""}]`,
+    );
     const settings = getSettings();
 
     return models.map((modelId) => {

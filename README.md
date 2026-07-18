@@ -215,25 +215,27 @@ Five minutes from zero to your first GLM reply.
 
 > **💡 Tips:**
 > - Registered models show up automatically in the Copilot Chat model picker.
-> - If a model appears in the **Language Models** view but not in the chat picker, hover its row and click the eye icon (👁) to enable visibility.
+> - Run `Z.AI: Set API Key` from the Command Palette to store your API key. Without it the picker will not list any Z.AI models.
+> - SecretStorage is per-device and is **not** synced by VS Code Settings Sync, so on a new machine you must re-enter the key even if everything else synced.
+> - If the picker still does not show Z.AI after setting the key, open the `Z.AI` output channel and look for the activation diagnostics block, then run `Developer: Reload Window`. See [doc/vscode-128-byok-utility-model.md §10](./doc/vscode-128-byok-utility-model.md).
 
 ---
 
 ## Commands
 
-Once installed, Z.AI models appear directly in the **GitHub Copilot Chat model picker** with no extra commands. The easiest way to manage your API key is **Settings, Language Models** (gear icon ⚙).
+Once installed, Z.AI models appear directly in the **GitHub Copilot Chat model picker** with no extra commands. Configure your API key by running **`Z.AI: Set API Key`** from the Command Palette (`Cmd+Shift+P` / `Ctrl+Shift+P`).
 
 For advanced usage, you can also run these commands via the Command Palette (`Cmd+Shift+P` / `Ctrl+Shift+P`):
 
 | Command | Description |
 |---|---|
 | `Z.AI: Manage Provider` | Manage API key, refresh models, or test connection |
-| `Z.AI: Set API Key` | Store or update your Z.AI API key |
+| `Z.AI: Set API Key` | Store or update your Z.AI API key (stored in VS Code SecretStorage, per-device) |
 | `Z.AI: Show Quota` | Open a detailed markdown report of all quota windows |
 | `Z.AI: Toggle Quota View` | Switch the status bar between 5-hour and weekly display |
 | `Z.AI: Diagnostics` | Show a markdown report of all registered Z.AI models |
 
-> **Note:** The native BYOK flow via **Language Models** (gear icon ⚙) is recommended.
+> **Note:** Z.AI is registered both declaratively (in `package.json`, so VS Code knows the `zai` vendor id) and programmatically (so the extension can supply the live model list). You do **not** need to use the `Language Models` (gear icon ⚙) view — the `Z.AI: Set API Key` command is the only onboarding step.
 
 ---
 
@@ -317,15 +319,34 @@ The Z.AI extension only sends the **official** `LanguageModelChatInformation` fi
 
 If the model picker doesn't show your Z.AI models or they can't be pinned:
 
-1. **Make sure Z.AI models are enabled in the picker.** Open the picker, search for "Z.AI", and click the eye (👁) icon to enable visibility. The eye icon is in the **Language Models** view (gear icon ⚙ → Z.AI) and toggles whether the model is listed in the picker.
+1. **Make sure your API key is set on this device.** SecretStorage is per-device and is **not** synced by VS Code Settings Sync. Run `Z.AI: Set API Key` from the Command Palette on every new machine, then run `Developer: Reload Window`. The activation diagnostics block in the `Z.AI` output channel will report how many models VS Code sees.
 2. **Pin a model as default.** Set `zai.defaultModel` in your user settings (e.g. `glm-5.2`). The extension marks that model as `isDefault: true` so VS Code highlights it in the picker and seeds new chat sessions with it.
 3. **Reload the window** after changing `zai.defaultModel` (the model list is cached per-window).
+4. **If the Extension Host log shows `Chat model provider uses UNKNOWN vendor zai`**, the declarative `languageModelChatProviders` contribution has been removed from `package.json` and must be restored. This is checked on every release.
 
 If the picker still misbehaves:
 
 - Open **Developer Tools** (`Cmd+Shift+P` → "Developer: Toggle Developer Tools") and look for console errors when you open the picker.
 - Check **Output → Z.AI** for any error logs from the model provider.
 - File an issue with the console error and your VS Code version.
+
+### "The gear icon / 'Manage Models…' in the picker does nothing when clicked"
+
+This is **not** a bug in the Z.AI extension — it is enforced by VS Code. The `workbench.action.chat.manage` command (the gear icon in the Copilot Chat model picker) has the precondition:
+
+```
+chatIsEnabled AND (Copilot entitlement OR github.copilot.clientByokEnabled)
+```
+
+`chatIsEnabled` is set to `true` by the **GitHub Copilot Chat** extension only after the user signs in to GitHub. On a second device where Settings Sync did not carry the auth state (Settings Sync intentionally does not sync some auth state for security), the user can end up in a state where:
+
+- The Z.AI extension is installed and the API key is set.
+- `selectChatModels({ vendor: "zai" })` returns 13 models (verified in the `Z.AI` output channel).
+- But clicking the gear icon does nothing — no popup, no error.
+
+The extension attempts to work around this on activation by setting the `github.copilot.clientByokEnabled` context key to `true`, which satisfies the OR-branch of the precondition. If the gear icon is still unresponsive after reload, the definitive fix is to **sign in to GitHub Copilot Chat** (a free personal GitHub account is enough — no Copilot Pro needed). The sign-in button is in the Copilot Chat sidebar.
+
+See [doc/vscode-128-byok-utility-model.md §10](./doc/vscode-128-byok-utility-model.md) for the full VS Code source analysis.
 
 ### "@z-research: Z.AI API key is not set"
 

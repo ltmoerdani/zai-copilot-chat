@@ -19,6 +19,9 @@
 7. [Technical Analysis](#7-technical-analysis)
 8. [Code Changes](#8-code-changes)
 9. [Prevention Recommendations](#9-prevention-recommendations)
+10. [Follow-up — "Z.AI missing from the picker on a second device" (0.4.0)](#10-follow-up--zaiai-missing-from-the-picker-on-a-second-device-040)
+11. [Follow-up — "Gear icon / 'Manage Models…' does nothing when clicked" (0.4.0)](#11-follow-up--gear-icon--manage-models-does-nothing-when-clicked-040)
+12. [Verification — Fresh-env smoke test of v0.4.0 (2026-07-18)](#12-verification--fresh-env-smoke-test-of-v040-2026-07-18)
 
 ---
 
@@ -309,3 +312,327 @@ print(data.get('chat.byokUtilityModelDefault', '(not set)'))
 "
 ```
 Expected output: `mainAgent`. If it shows anything else, set it manually in VS Code Settings UI (search `chat.byokUtilityModelDefault`, select **Use main agent model**).
+
+---
+
+## 10. Follow-up — "Z.AI missing from the picker on a second device" (0.4.0)
+
+> **Status:** ✅ Root cause identified, diagnostics added in v0.4.0
+> **Date:** July 18, 2026
+> **Severity:** High — Z.AI models silently missing from the Copilot Chat model picker on fresh devices
+
+### Symptom
+
+On a second Mac, Z.AI models never appeared in the Copilot Chat model picker, even after the user believed they had completed onboarding. Re-registering under the same vendor id reported `"already registered"`, and a fresh vendor id (e.g. `zai2`) also produced no models.
+
+### Root cause
+
+VS Code's `registerLanguageModelProvider` source (verified in `workbench.desktop.main.js`) is:
+
+```javascript
+registerLanguageModelProvider(o, e) {
+  if (!this._vendors.has(o))
+    throw new Error(`Chat model provider uses UNKNOWN vendor ${o}.`);
+  if (this._providers.has(o))
+    throw new Error(`Chat model provider for vendor ${o} is already registered.`);
+  this._providers.set(o, e);
+  // ...
+}
+```
+
+The `_vendors` map is populated **only** from `package.json` `languageModelChatProviders` contributions via `deltaLanguageModelChatProviderDescriptors`. Without the declarative contribution, VS Code logs `"Chat model provider uses UNKNOWN vendor zai"` and the programmatic registration silently fails.
+
+**Conclusion:** both paths must coexist. The declarative contribution (`package.json`) registers the vendor id, the programmatic provider (`vscode.lm.registerLanguageModelChatProvider`) supplies the model list. They are not redundant and must not be removed. The contribution is **retained** in v0.4.0.
+
+The actual failure on the second Mac was that the extension's SecretStorage entry `zai.apiKey` was empty on that machine. VS Code Settings Sync **does not sync SecretStorage** for security reasons, so the key has to be re-entered on each device via `Z.AI: Set API Key`. When the key is missing, `provideLanguageModelChatInformation` returns `[]` and the picker shows nothing — even though the vendor id is registered.
+
+### Verification
+
+Reproduced in an isolated environment:
+
+```bash
+CODE="/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"
+FRESH_DIR="/tmp/zai-040-fresh"
+FRESH_EXT="/tmp/zai-040-ext"
+rm -rf "$FRESH_DIR" "$FRESH_EXT" && mkdir -p "$FRESH_DIR" "$FRESH_EXT"
+"$CODE" --extensions-dir="$FRESH_EXT" --install-extension zai-copilot-chat-0.4.0.vsix
+"$CODE" --user-data-dir="$FRESH_DIR" --extensions-dir="$FRESH_EXT" --new-window "$FRESH_DIR"
+```
+
+With no API key the `Z.AI` output channel showed:
+
+```
+=== Z.AI activation diagnostics ===
+[activate] extension activated, vendor="zai"
+[activate] VS Code version: 1.129.1
+[activate] SecretStorage "zai.apiKey": MISSING — run 'Z.AI: Set API Key' then reload
+[activate] selectChatModels({ vendor: "zai" }): 0 model(s) visible to VS Code
+=== end activation diagnostics ===
+```
+
+After inserting the encrypted SecretStorage entry from the main profile into the fresh profile's `state.vscdb`:
+
+```
+=== Z.AI activation diagnostics ===
+[activate] SecretStorage "zai.apiKey": present (len=49)
+[activate] selectChatModels({ vendor: "zai" }): 13 model(s) visible to VS Code
+=== end activation diagnostics ===
+provideLanguageModelChatInformation: advertising 13 model(s) to VS Code [glm-4.5, glm-4.5-air, glm-4.6, …]
+```
+
+Removing the declarative contribution as an experiment caused `"[error] Error: Chat model provider uses UNKNOWN vendor zai."` in the Extension Host log — confirming the dependency. The contribution was restored before release.
+
+### Diagnostics added
+
+To make any future regression immediately diagnosable, v0.4.0 emits a one-shot activation banner to the `Z.AI` output channel:
+
+```
+2026-07-18T... === Z.AI activation diagnostics ===
+2026-07-18T... [activate] extension activated, vendor="zai"
+2026-07-18T... [activate] VS Code version: 1.129.1
+2026-07-18T... [activate] SecretStorage "zai.apiKey": present (len=...)
+2026-07-18T... [activate] selectChatModels({ vendor: "zai" }): 13 model(s) visible to VS Code
+2026-07-18T... === end activation diagnostics ===
+```
+
+If `selectChatModels` reports 0 models while the key is missing, a toast with a `Set API Key` action button is shown. `provideLanguageModelChatInformation` also logs when it returns `[]` because the key is missing, when cancelled, and how many models it advertises — closing the previous blind spot where VS Code silently reported 0 models with no trace.
+
+### Runbook for "Z.AI missing from picker" reports
+
+1. Open the `Z.AI` output channel. Look for the activation diagnostics banner.
+2. If `SecretStorage "zai.apiKey": MISSING` → run `Z.AI: Set API Key`, then `Developer: Reload Window`.
+3. If the key is present but `selectChatModels` still reports 0 models → check the Extension Host log for `"Chat model provider uses UNKNOWN vendor zai"`. That error means the declarative `languageModelChatProviders` contribution has been removed from `package.json` and must be restored.
+4. If `selectChatModels` reports 13 models but the picker is still empty → reload the window. VS Code caches the picker list per window.
+
+---
+
+## 11. Follow-up — "Gear icon / 'Manage Models…' does nothing when clicked" (0.4.0)
+
+> **Status:** ✅ Workaround added in v0.4.0
+> **Date:** July 18, 2026
+> **Severity:** Medium — blocks access to the Language Models view from the picker
+
+### Symptom
+
+In the Copilot Chat model picker, the gear icon (or the **Manage Models…** entry) does nothing when clicked — no popup, no error, no visible state change. This is independent of the Z.AI models showing up in the picker list.
+
+### Root cause
+
+The gear icon invokes VS Code's built-in command `workbench.action.chat.manage` ("Manage Language Models"). Extracted from `workbench.desktop.main.js`:
+
+```javascript
+class extends K {
+  constructor() {
+    super({
+      id: utt,  // "workbench.action.chat.manage"
+      title: N(9474, "Manage Language Models"),
+      precondition: OYt,  // ← gate
+      f1: true
+    })
+  }
+  async run(t) {
+    let i = t.get(ie);
+    await pVn(t);
+    return i.openEditor(new $ye, {pinned: true});
+  }
+}
+```
+
+The precondition `OYt` is:
+
+```javascript
+OYt = x.and(
+  ee.enabled,  // chatIsEnabled context key
+  x.or(
+    ee.Entitlement.planFree,        // chatPlanFree
+    ee.Entitlement.planEdu,
+    ee.Entitlement.planPro,
+    ee.Entitlement.planProPlus,
+    ee.Entitlement.planMax,
+    ee.Entitlement.planBusiness,
+    ee.Entitlement.planEnterprise,
+    ee.Entitlement.internal,
+    or.clientByokEnabled            // github.copilot.clientByokEnabled
+  )
+)
+```
+
+`ee.enabled` (`chatIsEnabled`) defaults to `false` and is set to `true` only by the GitHub Copilot Chat extension after the user signs in. On a second device where Settings Sync did not carry the auth state, the user can be in a state where:
+
+- The Z.AI extension is installed and the API key is set.
+- `selectChatModels({ vendor: "zai" })` returns 13 models.
+- But `chatIsEnabled` is `false`, so `ee.enabled` is false, so the precondition `OYt` fails, so the command is a no-op.
+
+The picker visibility helper mirrors this:
+
+```javascript
+function b_n(s) {
+  return s.clientByokEnabled || s.hasByokModels ||
+         s.entitlement === 5 ||  // Free
+         s.entitlement === 6 ||  // Pro
+         s.entitlement === 7 ||  // ProPlus
+         s.entitlement === 8 ||  // Max
+         s.entitlement === 9 ||  // Business
+         s.entitlement === 10 || // Enterprise / EDU
+         s.entitlement === 11 || // internal
+         s.isInternal;
+}
+```
+
+### Workaround
+
+The `clientByokEnabled` branch of the precondition is the escape hatch. Its definition:
+
+```javascript
+a.clientByokEnabled = new X("github.copilot.clientByokEnabled", !0, !0)
+```
+
+Default value is `true`. The extension sets it explicitly via:
+
+```typescript
+await vscode.commands.executeCommand(
+  "setContext",
+  "github.copilot.clientByokEnabled",
+  true,
+);
+```
+
+This is invoked from `logActivationDiagnostics` only when at least one Z.AI model is registered. Setting the context key satisfies the OR-branch of `OYt`, which makes the gear icon clickable again even when the user is not signed in to Copilot, as long as they have at least one BYOK model registered.
+
+This is defensive — `clientByokEnabled` already defaults to `true` per the schema, but VS Code sometimes leaves it unset until the Copilot extension first touches the context service. Forcing the value removes that race.
+
+### Definitive fix for end users
+
+If the gear icon is still unresponsive after reload, sign in to GitHub Copilot Chat. A free personal GitHub account is sufficient — no Copilot Pro subscription is required for BYOK usage. The sign-in button is in the Copilot Chat sidebar.
+
+### Verification
+
+After implementing the workaround:
+
+1. Fresh `--user-data-dir` install of v0.4.0 with API key set.
+2. `Z.AI` output channel reports:
+   ```
+   [activate] selectChatModels({ vendor: "zai" }): 13 model(s) visible to VS Code
+   [activate] set 'github.copilot.clientByokEnabled' = true (ensures Manage Models gear icon stays clickable for BYOK users who are not signed in to Copilot)
+   ```
+3. Gear icon in the picker opens the Language Models editor.
+
+---
+
+## 12. Verification — Fresh-env smoke test of v0.4.0 (2026-07-18)
+
+> **Status:** ✅ All fixes verified end-to-end
+> **Date:** July 18, 2026
+> **Tested version:** `zai-copilot-chat-0.4.0.vsix` (208 KB)
+
+### Test methodology
+
+To simulate a "fresh device" without modifying the author's main VS Code profile, the extension was installed into a fully isolated environment using `--user-data-dir` and `--extensions-dir`:
+
+```bash
+CODE="/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"
+FRESH_DIR="/tmp/zai-040-test"
+FRESH_EXT="/tmp/zai-040-test-ext"
+
+rm -rf "$FRESH_DIR" "$FRESH_EXT"
+mkdir -p "$FRESH_DIR" "$FRESH_EXT"
+
+# Install only the Z.AI extension into the isolated extensions dir
+"$CODE" --extensions-dir="$FRESH_EXT" \
+  --install-extension zai-copilot-chat-0.4.0.vsix
+
+# First launch: let VS Code create state.vscdb, then close
+"$CODE" --user-data-dir="$FRESH_DIR" --extensions-dir="$FRESH_EXT" \
+  --new-window --disable-workspace-trust "$FRESH_DIR"
+# (close after a few seconds)
+
+# Copy the encrypted SecretStorage entry from the main profile so the
+# fresh env has a valid API key without re-entering it manually.
+MAIN_SQLITE="$HOME/Library/Application Support/Code/User/globalStorage/state.vscdb"
+FRESH_SQLITE="$FRESH_DIR/User/globalStorage/state.vscdb"
+VALUE=$(sqlite3 "$MAIN_SQLITE" \
+  "SELECT value FROM ItemTable WHERE key = 'secret://{\"extensionId\":\"ltmoerdani.zai-copilot-chat\",\"key\":\"zai.apiKey\"}';")
+sqlite3 "$FRESH_SQLITE" \
+  "INSERT OR REPLACE INTO ItemTable (key, value) VALUES ('secret://{\"extensionId\":\"ltmoerdani.zai-copilot-chat\",\"key\":\"zai.apiKey\"}', '$VALUE');"
+
+# Second launch: activate with API key present
+"$CODE" --user-data-dir="$FRESH_DIR" --extensions-dir="$FRESH_EXT" \
+  --new-window --disable-workspace-trust "$FRESH_DIR"
+```
+
+### Test matrix
+
+| Check | Expected | Actual | Result |
+|---|---|---|---|
+| `.vsix` builds without errors | clean compile | `tsc -p ./` clean | ✅ |
+| Unit tests | 75/75 pass | 75 pass, 0 fail | ✅ |
+| Extension activates in fresh env | activation log in exthost | `ExtensionService#_doActivateExtension ltmoerdani.zai-copilot-chat, startup: false, activationEvent: 'onStartupFinished'` | ✅ |
+| No `UNKNOWN vendor zai` error | declarative contribution present | `grep -c languageModelChatProviders package.json` = 1 | ✅ |
+| API key read from SecretStorage | present, non-zero length | `SecretStorage "zai.apiKey": present (len=49)` | ✅ |
+| `selectChatModels({ vendor: "zai" })` | ≥ 1 model | `13 model(s) visible to VS Code` | ✅ |
+| `provideLanguageModelChatInformation` log | shows advertised count | `advertising 13 model(s) to VS Code [glm-4.5, glm-4.5-air, glm-4.6, …]` | ✅ |
+| `setContext` workaround runs | banner includes setContext line | `set 'github.copilot.clientByokEnabled' = true (...)` | ✅ |
+| Extension Host errors | none related to zai | none | ✅ |
+
+### Activation banner captured during test
+
+```
+2026-07-18T04:49:43.326Z === Z.AI activation diagnostics ===
+2026-07-18T04:49:43.326Z [activate] extension activated, vendor="zai"
+2026-07-18T04:49:43.326Z [activate] VS Code version: 1.129.1
+2026-07-18T04:49:43.326Z [activate] SecretStorage "zai.apiKey": present (len=49)
+2026-07-18T04:49:43.326Z [activate] selectChatModels({ vendor: "zai" }): 13 model(s) visible to VS Code
+2026-07-18T04:49:43.326Z [activate] set 'github.copilot.clientByokEnabled' = true (ensures Manage Models gear icon stays clickable for BYOK users who are not signed in to Copilot)
+2026-07-18T04:49:43.326Z === end activation diagnostics ===
+```
+
+```
+[2026-07-18T04:49:43.724Z] provideLanguageModelChatInformation: advertising 13 model(s) to VS Code [glm-4.5, glm-4.5-air, glm-4.6, …]
+[2026-07-18T04:49:43.749Z] Refreshed quota: [quota] 5-Hours=58%
+```
+
+### Bug discovered and fixed during the test
+
+The first integration test surfaced a regression in the new diagnostics code:
+
+- **Symptom**: the activation banner appeared, but the `set 'github.copilot.clientByokEnabled' = true ...` line was missing from the output channel — even though the workaround code was present in `extension.ts`.
+- **Root cause**: `lines.push(...)` for the setContext result was executed **after** `channel.appendLine(lines.join("\n"))`. The log line was added to the array but the array had already been flushed, so the result was silently dropped.
+- **Fix**: reordered the code so the `setContext` block runs before the final `channel.appendLine`. After rebuilding the `.vsix` and reinstalling in the fresh env, the setContext line appears in the banner as expected.
+- **Lesson**: when adding new log lines to an existing banner, always trace the order between `lines.push(...)` and the single `appendLine(lines.join(...))` call. The output channel only sees the snapshot at flush time.
+
+### Files changed in v0.4.0
+
+| File | Change |
+|---|---|
+| `src/extension.ts` | New `logActivationDiagnostics()` function (writes a one-shot banner to the `Z.AI` output channel — VS Code version, SecretStorage presence, `selectChatModels` count polled at 0/500/1500 ms, `setContext` workaround result). New log lines in `provideLanguageModelChatInformation` when returning `[]`, cancelled, or advertising N models. New `Z.AI: Set API Key` toast when the key is missing. |
+| `package.json` | Bumped `0.3.3` → `0.4.0`. Declarative `languageModelChatProviders` contribution **retained** (required — see §10). |
+| `CHANGELOG.md` | New `0.4.0` entry under both `Investigated` (for the two symptoms: "missing from picker" and "gear icon does nothing") and `Added` (diagnostics banner, provider logging, `setContext` workaround). |
+| `README.md` | Quick Start tips updated to call out per-device SecretStorage. Commands table notes declarative + programmatic coexistence. Troubleshooting section gains a dedicated entry for "gear icon does nothing" with the sign-in-to-Copilot definitive fix. |
+| `doc/vscode-128-byok-utility-model.md` | This document, sections §10, §11, and §12. |
+
+### Runbook (final, ordered)
+
+If a user reports "Z.AI models don't appear in the picker" or "the gear icon does nothing":
+
+1. **Check the `Z.AI` output channel.** It now prints a single activation banner that pinpoints the failure mode.
+2. **If `SecretStorage "zai.apiKey": MISSING`** → run `Z.AI: Set API Key`, then `Developer: Reload Window`. SecretStorage is per-device and is not synced by VS Code Settings Sync.
+3. **If `selectChatModels` reports 0 models while the key is present** → check the Extension Host log for `Chat model provider uses UNKNOWN vendor zai`. If present, the declarative `languageModelChatProviders` contribution has been removed from `package.json` and must be restored.
+4. **If `selectChatModels` reports N models but the picker is empty** → reload the window. VS Code caches the picker list per window.
+5. **If the gear icon is still unresponsive after reload** → sign in to GitHub Copilot Chat (free tier is enough). The `setContext` workaround should keep the gear clickable in most cases, but signing in is the definitive fix because it sets `chatIsEnabled = true` which satisfies the `AND`-branch of the precondition that `clientByokEnabled` cannot reach on its own.
+
+### Build artifact
+
+```
+DONE  Packaged: /Users/ltmoerdani/Startup/zai-copilot-chat/zai-copilot-chat-0.4.0.vsix (79 files, 208 KB)
+```
+
+SHA-256 (computed after the test session):
+
+```
+5026a005cebc6470d5a3cddd964ad1524ee183083bbe8f6a773d5da251cdcf8f  zai-copilot-chat-0.4.0.vsix
+```
+
+```bash
+$ shasum -a 256 zai-copilot-chat-0.4.0.vsix
+5026a005cebc6470d5a3cddd964ad1524ee183083bbe8f6a773d5da251cdcf8f  zai-copilot-chat-0.4.0.vsix
+```

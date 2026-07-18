@@ -2,7 +2,7 @@
   "name": "zai-copilot-chat",
   "displayName": "Z.AI Copilot Chat: BYOK 13+ GLM Models",
   "description": "Use 13+ Z.AI GLM models (GLM-5.2 1M context, GLM-4.7, GLM-5, free Flash + Vision models) in GitHub Copilot Chat. BYOK, no Copilot Pro needed. Includes @z-research deep-research agent.",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "publisher": "ltmoerdani",
   "license": "MIT",
   "icon": "media/zai.png",
