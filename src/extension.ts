@@ -1231,9 +1231,15 @@ async function streamChatCompletions(
     ...(tools.length ? { tools, tool_choice: toolChoice(options.toolMode) } : {})
   };
 
-  // Z.AI GLM models need thinking disabled to return normal text content
+  // Z.AI GLM models: thinking is ENABLED by default (especially on Coding Plan endpoint).
+  // We must explicitly disable it to prevent reasoning_content from leaking into the chat.
+  // Multi-layer defense:
+  //   1. thinking.type = "disabled"  — primary switch (all GLM-4.5+ models)
+  //   2. reasoning_effort = "none"   — backup for GLM-5.2+ (docs: "none" = model skips thinking)
+  //   3. clear_thinking = true       — don't preserve reasoning in context (Coding Plan default)
   if (modelId.startsWith("glm-")) {
-    requestBody.thinking = { type: "disabled" };
+    requestBody.thinking = { type: "disabled", clear_thinking: true };
+    requestBody.reasoning_effort = "none";
   }
 
   output.appendLine(`[${new Date().toISOString()}] Token budget: model=${modelId} input≈${estimatedInputTokens} maxOut=${requestMaxTokens} (contextWindow=${limits.contextWindow}, budgetUsed=${estimatedInputTokens + requestMaxTokens})`);
@@ -1875,6 +1881,10 @@ function hasMessagePayload(message: ApiMessage): boolean {
 class OpenAiResponseExtractor {
   private readonly pendingToolCalls = new Map<number, PendingToolCall>();
   private reasoningContent = "";
+  // Tracks whether we're inside a <think> block that leaked into `content`.
+  // Persists across stream chunks since <think> and </think> can arrive separately.
+  private insideThinkBlock = false;
+  private pendingContentBuffer = "";
 
   constructor(
     private readonly onReasoningContent?: (toolCallIds: string[], reasoningContent: string) => void,
@@ -1895,7 +1905,13 @@ class OpenAiResponseExtractor {
     const delta = first.delta;
     if (isRecord(delta)) {
       if (typeof delta.content === "string") {
-        parts.push(new vscode.LanguageModelTextPart(delta.content));
+        // Defensive: some Z.AI API versions leak reasoning into `content` instead
+        // of `reasoning_content` when thinking isn't properly disabled.
+        // Filter out <think>...</think> blocks that may appear inline.
+        const filteredContent = this.filterThinkingFromContent(delta.content);
+        if (filteredContent) {
+          parts.push(new vscode.LanguageModelTextPart(filteredContent));
+        }
       }
       if (typeof delta.reasoning_content === "string") {
         this.reasoningContent += delta.reasoning_content;
@@ -1905,6 +1921,15 @@ class OpenAiResponseExtractor {
 
     if (first.finish_reason === "tool_calls") {
       parts.push(...this.flushToolCalls());
+    }
+
+    // Flush accumulated reasoning on normal completion too, so it doesn't leak
+    // into the next request's context via stale state.
+    if (first.finish_reason === "stop" && this.reasoningContent.trim()) {
+      this.onReasoningDebug?.(this.reasoningContent);
+      // Note: we deliberately do NOT push reasoning as TextPart here —
+      // reasoning must never appear in the user-visible chat output.
+      this.reasoningContent = "";
     }
 
     return parts;
@@ -1940,6 +1965,71 @@ class OpenAiResponseExtractor {
     }
   }
 
+  /**
+   * Filters leaked thinking/reasoning content from the `delta.content` stream.
+   *
+   * Some Z.AI API versions (especially Coding Plan endpoint) may ignore
+   * `thinking: { type: "disabled" }` and emit reasoning inside `<think>...</think>`
+   * tags within the `content` field instead of the proper `reasoning_content` field.
+   *
+   * This method handles:
+   * - Complete `<think>...</think>` blocks within a single chunk
+   * - Streaming: `<think>` opening tag in one chunk, content in subsequent chunks,
+   *   `</think>` closing tag in a later chunk
+   * - Captured thinking text into `reasoningContent` for debug logging
+   */
+  private filterThinkingFromContent(content: string): string {
+    this.pendingContentBuffer += content;
+    let output = "";
+
+    while (this.pendingContentBuffer.length > 0) {
+      if (this.insideThinkBlock) {
+        // Looking for </think> closing tag
+        const closeIdx = this.pendingContentBuffer.indexOf("</think>");
+        if (closeIdx === -1) {
+          // No closing tag yet — entire buffer is thinking content.
+          // Keep a small tail in case </think> is split across chunks.
+          const safeLength = Math.max(0, this.pendingContentBuffer.length - 8);
+          if (safeLength > 0) {
+            const thinking = this.pendingContentBuffer.slice(0, safeLength);
+            this.reasoningContent += thinking;
+            this.pendingContentBuffer = this.pendingContentBuffer.slice(safeLength);
+          }
+          break;
+        }
+        // Found closing tag — everything before it is thinking
+        const thinking = this.pendingContentBuffer.slice(0, closeIdx);
+        if (thinking) {
+          this.reasoningContent += thinking;
+        }
+        this.pendingContentBuffer = this.pendingContentBuffer.slice(closeIdx + 8);
+        this.insideThinkBlock = false;
+      } else {
+        // Looking for <think> opening tag
+        const openIdx = this.pendingContentBuffer.indexOf("<think>");
+        if (openIdx === -1) {
+          // No opening tag — check if buffer ends with partial "<think"
+          const partialTag = partialOpenTagLength(this.pendingContentBuffer);
+          if (partialTag > 0) {
+            // Output everything except the potential partial tag
+            output += this.pendingContentBuffer.slice(0, this.pendingContentBuffer.length - partialTag);
+            this.pendingContentBuffer = this.pendingContentBuffer.slice(this.pendingContentBuffer.length - partialTag);
+          } else {
+            output += this.pendingContentBuffer;
+            this.pendingContentBuffer = "";
+          }
+          break;
+        }
+        // Found opening tag — output everything before it
+        output += this.pendingContentBuffer.slice(0, openIdx);
+        this.pendingContentBuffer = this.pendingContentBuffer.slice(openIdx + 7);
+        this.insideThinkBlock = true;
+      }
+    }
+
+    return output;
+  }
+
   private flushToolCalls(): vscode.LanguageModelToolCallPart[] {
     const toolCalls = Array.from(this.pendingToolCalls.values())
       .filter((toolCall) => toolCall.name);
@@ -1961,6 +2051,22 @@ class OpenAiResponseExtractor {
   }
 }
 
+/**
+ * Checks if the buffer ends with a partial `<think>` opening tag.
+ * Returns the length of the partial match (0 if none).
+ * Example: "Hello<thin" → returns 4 (matches "<thin", partial of "<think>")
+ */
+function partialOpenTagLength(buffer: string): number {
+  const tag = "<think>";
+  for (let i = 1; i < tag.length; i++) {
+    const suffix = tag.slice(0, i);
+    if (buffer.endsWith(suffix)) {
+      return i;
+    }
+  }
+  return 0;
+}
+
 function extractChatCompletionParts(data: unknown): vscode.LanguageModelResponsePart[] {
   if (!isRecord(data) || !Array.isArray(data.choices)) {
     return [];
@@ -1975,7 +2081,11 @@ function extractChatCompletionParts(data: unknown): vscode.LanguageModelResponse
   const message = first.message;
   if (isRecord(message)) {
     if (typeof message.content === "string") {
-      parts.push(new vscode.LanguageModelTextPart(message.content));
+      // Strip any leaked <think>...</think> blocks from non-streaming responses
+      const cleaned = message.content.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+      if (cleaned) {
+        parts.push(new vscode.LanguageModelTextPart(cleaned));
+      }
     }
     for (const toolCallPart of toolCallPartsFromOpenAiMessage(message.tool_calls, typeof message.reasoning_content === "string" ? message.reasoning_content : undefined)) {
       parts.push(toolCallPart);
