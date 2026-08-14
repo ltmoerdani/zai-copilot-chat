@@ -31,8 +31,19 @@ const SECRET_KEY = "zai.apiKey";
 /** Default chat endpoint for planning / synthesis calls. */
 const ZAI_CHAT_URL = "https://api.z.ai/api/coding/paas/v4/chat/completions";
 
-/** Default model for synthesis LLM calls. */
-const DEFAULT_SYNTHESIS_MODEL = "glm-5.2";
+/** Default model for synthesis LLM calls. GLM-5.3 — latest flagship (1M context). */
+const DEFAULT_SYNTHESIS_MODEL = "glm-5.3";
+
+/**
+ * GLM-5.3 cannot disable thinking (see extension.ts `isAlwaysThinkingModel`).
+ * The research pipeline makes many small LLM calls (query planning + chunk
+ * summaries), so we pin `reasoning_effort: "low"` to keep them fast and cheap.
+ */
+const RESEARCH_REASONING_EFFORT = "low" as const;
+
+function isAlwaysThinkingModel(modelId: string): boolean {
+  return modelId.startsWith("glm-5.3");
+}
 
 export interface ParticipantDeps {
   context: vscode.ExtensionContext;
@@ -266,6 +277,14 @@ class ZaiChatLLM implements ResearchLLM {
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt },
           ],
+          // GLM-5.3+ rejects `thinking.type: "disabled"`; keep thinking enabled
+          // with a low effort so planning/synthesis calls stay fast.
+          ...(isAlwaysThinkingModel(this.model)
+            ? {
+                thinking: { type: "enabled", clear_thinking: true },
+                reasoning_effort: RESEARCH_REASONING_EFFORT,
+              }
+            : {}),
         }),
         signal: controller.signal,
       });

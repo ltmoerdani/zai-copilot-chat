@@ -2,14 +2,14 @@
 
 # 🧠 Z.AI for GitHub Copilot Chat
 
-### Use **13+ Z.AI GLM models** (GLM-5.2 1M context, GLM-4.7, free Flash + Vision) in GitHub Copilot Chat — **no Copilot Pro needed**
+### Use **14+ Z.AI GLM models** (GLM-5.3 flagship 1M context, GLM-5.2, GLM-4.7, free Flash + Vision) in GitHub Copilot Chat — **no Copilot Pro needed**
 
 **BYOK • Free tier included • Deep-research agent built in**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![VS Code](https://img.shields.io/badge/VS%20Code-1.120%2B-blue)](https://code.visualstudio.com/)
-[![Z.AI](https://img.shields.io/badge/Z.AI-GLM-5.2-4f46e5)](https://z.ai)
-[![Models](https://img.shields.io/badge/Models-13%2B-22c55e)](#-models)
+[![Z.AI](https://img.shields.io/badge/Z.AI-GLM--5.3-4f46e5)](https://z.ai)
+[![Models](https://img.shields.io/badge/Models-14%2B-22c55e)](#-models)
 [![Free Tier](https://img.shields.io/badge/Free%20Tier-Included-success)](#-models)
 
 **[Why bother](#-why-bother)** · **[Quick Start](#-quick-start)** · **[Models](#-models)** · **[Copilot vs This](#-github-copilot-vs-this-extension)** · **[Deep Research](#-deep-research)** · **[FAQ](#-faq)** · **[Community](#-community)**
@@ -20,12 +20,12 @@
 
 > ### 💡 The pitch
 >
-> **GitHub Copilot Chat is great, but you're locked to the models GitHub picks for you.** This extension lets you bring your own Z.AI API key and chat with GLM-5.2 (1M context), GLM-4.7, GLM-5, plus free Flash and Vision models — right inside the Copilot Chat you already use. No Copilot Pro subscription, no second editor. There's also a `@z-research` agent that fetches dozens of cited sources and writes you a report.
+> **GitHub Copilot Chat is great, but you're locked to the models GitHub picks for you.** This extension lets you bring your own Z.AI API key and chat with GLM-5.3 (1M context), GLM-5.2, GLM-4.7, plus free Flash and Vision models — right inside the Copilot Chat you already use. No Copilot Pro subscription, no second editor. There's also a `@z-research` agent that fetches dozens of cited sources and writes you a report.
 
 ```mermaid
 flowchart LR
     A["You, in VS Code"] -->|"type a prompt"| B[Copilot Chat]
-    B -->|"model picker"| C["Z.AI GLM-5.2 / 4.7 / Flash / Vision"]
+    B -->|"model picker"| C["Z.AI GLM-5.3 / 5.2 / 4.7 / Flash / Vision"]
     C -->|"your API key"| D["https://api.z.ai"]
     D -->|"streamed reply"| B
 ```
@@ -37,9 +37,10 @@ You already love Copilot Chat. Now imagine it powered by Z.AI's GLM models — a
 | | What you get |
 |---|---|
 | 💸 **Cost** | Free GitHub account + Z.AI API key. No Copilot Pro ($10/mo) or Pro+ ($39/mo) needed |
-| 🌍 **Models** | 13+ GLM models: GLM-5.2, GLM-5.1, GLM-5, GLM-4.7, GLM-4.6, GLM-4.5, Air, AirX |
+| 🌍 **Models** | 14+ GLM models: GLM-5.3, GLM-5.2, GLM-5.1, GLM-5, GLM-4.7, GLM-4.6, GLM-4.5, Air, AirX |
 | 🤖 **Agent Mode** | `@z-research` deep-research agent with dozens of cited sources |
-| 🧠 **1M context** | GLM-5.2 holds ~1 million tokens — paste an entire repo or a book chapter |
+| 🧠 **1M context** | GLM-5.3 / GLM-5.2 hold ~1 million tokens — paste an entire repo or a book chapter |
+| 💭 **Reasoning control** | GLM-5.3 always thinks — steer depth via `zai.reasoningEffort` (`low` / `high` / `max`) |
 | 👁️ **Vision** | GLM-5V-Turbo, GLM-4.6V, GLM-4.6V-Flash read screenshots and diagrams |
 | 🆓 **Free models** | `glm-4.5-flash` (text) and `glm-4.6v-flash` (vision) are $0 on Z.AI |
 | 🔒 **Key storage** | Your API key is stored in VS Code SecretStorage, never sent anywhere but Z.AI |
@@ -53,8 +54,8 @@ You already love Copilot Chat. Now imagine it powered by Z.AI's GLM models — a
 
 | | Copilot Free | Copilot Pro ($10/mo) | Copilot Pro+ ($39/mo) | **This Extension (BYOK)** |
 |---|:---:|:---:|:---:|:---:|
-| GLM-5.2 (1M context) | ❌ | ❌ | ❌ | ✅ |
-| GLM-4.7 / GLM-5 / GLM-5.1 | ❌ | ❌ | ❌ | ✅ |
+| GLM-5.3 (1M context) | ❌ | ❌ | ❌ | ✅ |
+| GLM-5.2 / GLM-4.7 / GLM-5 / GLM-5.1 | ❌ | ❌ | ❌ | ✅ |
 | Vision models (GLM-4.6V) | ❌ | ❌ | ❌ | ✅ |
 | Free tier (Flash models) | ❌ | ❌ | ❌ | ✅ $0 |
 | Deep-research agent (`@z-research`) | ❌ | ❌ | ❌ | ✅ |
@@ -67,13 +68,14 @@ You pay Z.AI per-token (or use the free Flash models). No middleman subscription
 
 ## What Is This?
 
-**Z.AI for GitHub Copilot Chat** is a VS Code extension that registers [Z.AI](https://z.ai) GLM models (including **GLM-5.2**, **GLM-5.1**, **GLM-5**, and **GLM-4.7**) into **GitHub Copilot Chat** through the official VS Code *Language Model Chat Provider API*.
+**Z.AI for GitHub Copilot Chat** is a VS Code extension that registers [Z.AI](https://z.ai) GLM models (including **GLM-5.3**, **GLM-5.2**, **GLM-5.1**, **GLM-5**, and **GLM-4.7**) into **GitHub Copilot Chat** through the official VS Code *Language Model Chat Provider API*.
 
 You pick a Z.AI GLM model from the Copilot Chat model picker the same way you would pick GPT-4 or Claude. Enter your Z.AI API key once, and that's it. No Copilot Pro or Enterprise subscription needed.
 
 | Model | Context | Max Output | Vision | Description |
 |---|---:|---:|:---:|---|
-| **GLM-5.2** | 1M | 128K | ❌ | Newest flagship, 1M context window, focused on coding and long-horizon tasks |
+| **GLM-5.3** | 1M | 128K | ❌ | Newest flagship — coding +50% vs GLM-5.2, emergent cybersecurity skills. **Always thinks** (`zai.reasoningEffort`: low/high/max) |
+| **GLM-5.2** | 1M | 128K | ❌ | Previous flagship, 1M context window, focused on coding and long-horizon tasks (auto-routed to GLM-5.3 by the Coding Plan) |
 | **GLM-5.1** | 200K | 128K | ❌ | Flagship tuned for long-horizon tasks |
 | **GLM-5** | 200K | 128K | ❌ | Latest GLM generation with agentic planning |
 | **GLM-5-Turbo** | 200K | 128K | ❌ | GLM-5 variant for long, complex tasks |
@@ -262,9 +264,10 @@ The quota is fetched from `https://api.z.ai/api/monitor/usage/quota/limit` and a
 | `zai.maxTokens` | `number` | `0` | Max output token override. `0` uses the per-model bundled maximum. |
 | `zai.maxInputTokens` | `number` | `0` | Context window override. `0` uses the per-model bundled context size. |
 | `zai.debugReasoning` | `boolean` | `false` | Write provider `reasoning_content` to **Output → Z.AI** for debugging |
-| `zai.requestTimeout` | `number` | `180000` | Connection timeout in ms. Auto-scaled **1.5×** for 200K flagship models (glm-5.1/5/4.7) and capped at 300000ms. Inactivity timer scales the same way (90–180s window). |
+| `zai.requestTimeout` | `number` | `180000` | Connection timeout in ms. Auto-scaled **1.5×** for 200K flagship models (glm-5.3/5.2/5.1/5/4.7) and capped at 300000ms. Inactivity timer scales the same way (90–180s window). |
+| `zai.reasoningEffort` | `string` | `high` | Reasoning effort for GLM-5.3+ (thinking cannot be disabled): `low` = lightweight, `high` = enhanced, `max` = deepest (slowest, most tokens). Older models keep thinking disabled. |
 | `zai.maxRetries` | `number` | `2` | Automatic retries on transient network errors (fetch failed, timeout, 5xx, 429) with exponential backoff (1s → 2s → max 10s + jitter). |
-| `zai.defaultModel` | `string` | `""` | Model id to mark as the default selection in the Copilot Chat model picker (for example `glm-5.2`). Leave empty to mark no model as default; users can still pick any model manually. |
+| `zai.defaultModel` | `string` | `""` | Model id to mark as the default selection in the Copilot Chat model picker (for example `glm-5.3`). Leave empty to mark no model as default; users can still pick any model manually. |
 | `zai.showUsageStatusBar` | `boolean` | `true` | Show the latest Z.AI usage summary (prompt→output tokens) in the VS Code status bar after each response. |
 | `zai.showQuotaStatusBar` | `boolean` | `true` | Show the Z.AI Coding Plan quota (5-hour / weekly) in the VS Code status bar. Hover for a graphical SVG donut chart; click to toggle between windows. |
 | `zai.quotaRefreshInterval` | `number` | `5` | How often (in minutes) to refresh the Z.AI Coding Plan quota. `0` disables automatic refresh. |
@@ -273,7 +276,7 @@ The quota is fetched from `https://api.z.ai/api/monitor/usage/quota/limit` and a
 | `zai.research.maxIterations` | `number` | `5` | Max query-expansion iterations before synthesis (`1`–`10`). |
 | `zai.research.concurrency` | `number` | `3` | Parallel MCP calls during search + read phases. Higher is faster but may hit the Z.AI MCP rate limit (~3-5 req/s safe). |
 | `zai.research.cacheTTL` | `number` | `3600` | Cache TTL in seconds for Z.AI search + read results. `0` disables caching. |
-| `zai.research.synthesisModel` | `string` | `glm-5.2` | Z.AI model used for planning queries and synthesising the final report. Use a high-context model (e.g. glm-5.2 with 1M context) for deep research. |
+| `zai.research.synthesisModel` | `string` | `glm-5.3` | Z.AI model used for planning queries and synthesising the final report. Use a high-context model (e.g. glm-5.3 with 1M context) for deep research. |
 | `zai.research.webSearchToolName` | `string` | `web_search_prime` | VS Code tool name for the Z.AI Web Search MCP server. The default matches the snake_case form VS Code exposes (e.g. `mcp_mcp-web-searc_web_search_prime`). Override if VS Code's MCP tool name format changes. |
 | `zai.research.webReaderToolName` | `string` | `webReader` | VS Code tool name for the Z.AI Web Reader MCP server. Default matches the camelCase form VS Code exposes. Override if VS Code's MCP tool name format changes. |
 
@@ -295,7 +298,7 @@ If you want to configure a different model for utility tasks, set `chat.utilityS
 
 ### "Request timed out for glm-5.1" / "Connection timed out after …"
 
-Flagship 200K-context models (`glm-5.1`, `glm-5`, `glm-5-turbo`, `glm-4.7`) have noticeably higher cold-start latency than the smaller models. On long or busy sessions they can take 60 to 120s to send the **first token**.
+Flagship 200K-context models (`glm-5.3`, `glm-5.2`, `glm-5.1`, `glm-5`, `glm-5-turbo`, `glm-4.7`) have noticeably higher cold-start latency than the smaller models. On long or busy sessions they can take 60 to 120s to send the **first token**. GLM-5.3 additionally **always thinks** — if responses feel slow, lower `zai.reasoningEffort` from `high` to `low`.
 
 **The extension already mitigates this automatically:**
 
@@ -320,7 +323,7 @@ The Z.AI extension only sends the **official** `LanguageModelChatInformation` fi
 If the model picker doesn't show your Z.AI models or they can't be pinned:
 
 1. **Make sure your API key is set on this device.** SecretStorage is per-device and is **not** synced by VS Code Settings Sync. Run `Z.AI: Set API Key` from the Command Palette on every new machine, then run `Developer: Reload Window`. The activation diagnostics block in the `Z.AI` output channel will report how many models VS Code sees.
-2. **Pin a model as default.** Set `zai.defaultModel` in your user settings (e.g. `glm-5.2`). The extension marks that model as `isDefault: true` so VS Code highlights it in the picker and seeds new chat sessions with it.
+2. **Pin a model as default.** Set `zai.defaultModel` in your user settings (e.g. `glm-5.3`). The extension marks that model as `isDefault: true` so VS Code highlights it in the picker and seeds new chat sessions with it.
 3. **Reload the window** after changing `zai.defaultModel` (the model list is cached per-window).
 4. **If the Extension Host log shows `Chat model provider uses UNKNOWN vendor zai`**, the declarative `languageModelChatProviders` contribution has been removed from `package.json` and must be restored. This is checked on every release.
 
@@ -373,7 +376,7 @@ That's the normal end-to-end time for a deep-mode run. The wall-clock time is bo
 
 - **Search phase**: bounded by `zai.research.concurrency` (default 3) and the 30s per-call timeout.
 - **Read phase**: up to about 25 source reads in parallel, again 30s timeout each.
-- **Synth phase**: 3 to 5 LLM calls (1 reduce plus N chunk summaries) on the synthesis model. With `glm-5.2` (1M context), this is fast.
+- **Synth phase**: 3 to 5 LLM calls (1 reduce plus N chunk summaries) on the synthesis model. With `glm-5.3` (1M context), this is fast.
 
 To shorten: use **quick mode** (omit `deep` / `thorough` / `menyeluruh` keywords from your prompt), lower `zai.research.maxSources`, or pick a smaller synthesis model.
 
@@ -409,6 +412,8 @@ VS Code and Copilot read separate input and output metadata fields for the UI. G
 
 | Model | Context window | Max output tokens | Vision |
 |---|---:|---:|:---:|
+| `glm-5.3` | 1M (1,000,000) | 128K (131,072) | ❌ |
+| `glm-5.2` | 1M (1,000,000) | 128K (131,072) | ❌ |
 | `glm-4.7` | 200K (204,800) | 128K (131,072) | ❌ |
 | `glm-5` | 200K (204,800) | 128K (131,072) | ❌ |
 | `glm-5.1` | 200K (204,800) | 128K (131,072) | ❌ |

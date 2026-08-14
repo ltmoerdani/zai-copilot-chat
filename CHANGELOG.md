@@ -2,6 +2,26 @@
 
 All notable changes to the **Z.AI Copilot Chat** extension are documented here.
 
+## 0.5.0 — 2026-08-15
+
+### Added
+
+- **GLM-5.3 support** — Z.AI released GLM-5.3, the new flagship: 1M context, 128K max output, coding +50% vs GLM-5.2 on Z.ai Code Bench, open-source SOTA on Terminal-Bench 3.0, and emergent cybersecurity capability (CyberGym 84.5%). The model is bundled at the top of the model list (`glm-5.3`) and is available immediately on the GLM Coding Plan endpoint this extension already uses. Note: Z.AI auto-routes `glm-5.2`/`glm-5.1` requests to GLM-5.3 server-side, so existing selections keep working.
+
+- **`zai.reasoningEffort` setting** (`low` | `high` | `max`, default `high`) — GLM-5.3 removed the ability to disable thinking: `thinking.type: "disabled"` and `reasoning_effort: "none"` are rejected and the request fails. The extension now sends `thinking: { type: "enabled" }` + the configured `reasoning_effort` for GLM-5.3+ (older models keep thinking fully disabled, as before). Reasoning output is still captured and never rendered in chat; enable `zai.debugReasoning` to inspect it.
+
+### Changed
+
+- **Research synthesis model default** — `zai.research.synthesisModel` now defaults to `glm-5.3` (was `glm-5.2`). Research pipeline LLM calls (query planning, chunk summaries) pin `reasoning_effort: "low"` for GLM-5.3+ to stay fast and cheap.
+
+- **Timeout hint + flagship multiplier docs** — the timeout troubleshooting message and 1.5× flagship multiplier comments now mention `glm-5.3` (1M context qualifies automatically).
+
+- **Marketplace metadata** — `displayName` now reads "BYOK 14+ GLM Models", the description leads with GLM-5.3, and `glm-5.3` was added to keywords.
+
+### Documentation
+
+- New research + implementation note: [`doc/glm-5.3-support.md`](./doc/glm-5.3-support.md) — official specs, the always-on-thinking breaking change, request-shape comparison, and the migration decisions taken.
+
 ## 0.4.0 — 2026-07-18
 
 ### Fixed

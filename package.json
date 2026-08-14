@@ -1,8 +1,8 @@
 {
   "name": "zai-copilot-chat",
-  "displayName": "Z.AI Copilot Chat: BYOK 13+ GLM Models",
-  "description": "Use 13+ Z.AI GLM models (GLM-5.2 1M context, GLM-4.7, GLM-5, free Flash + Vision models) in GitHub Copilot Chat. BYOK, no Copilot Pro needed. Includes @z-research deep-research agent.",
-  "version": "0.4.0",
+  "displayName": "Z.AI Copilot Chat: BYOK 14+ GLM Models",
+  "description": "Use 14+ Z.AI GLM models (GLM-5.3 flagship 1M context, GLM-5.2, GLM-4.7, free Flash + Vision models) in GitHub Copilot Chat. BYOK, no Copilot Pro needed. Includes @z-research deep-research agent.",
+  "version": "0.5.0",
   "publisher": "ltmoerdani",
   "license": "MIT",
   "icon": "media/zai.png",
@@ -21,6 +21,7 @@
     "language-model",
     "language-models",
     "glm",
+    "glm-5.3",
     "glm-5.2",
     "glm-4.7",
     "glm-5",
@@ -124,7 +125,17 @@
           "default": 180000,
           "minimum": 10000,
           "maximum": 300000,
-          "description": "Connection timeout in ms for API requests. During streaming, a separate inactivity timer (half this value, min 90s) aborts if no data arrives. Default 180000 (3 min) — flagship models like glm-5.1 (200K context) need longer cold start than smaller models."
+          "description": "Connection timeout in ms for API requests. During streaming, a separate inactivity timer (half this value, min 90s) aborts if no data arrives. Default 180000 (3 min) — flagship models like glm-5.3 (1M context) need longer cold start than smaller models."
+        },
+        "zai.reasoningEffort": {
+          "type": "string",
+          "enum": [
+            "low",
+            "high",
+            "max"
+          ],
+          "default": "high",
+          "description": "Reasoning effort for models whose thinking cannot be disabled (GLM-5.3+): `low` = lightweight, `high` = enhanced, `max` = deepest (slowest, most tokens). Older models are unaffected — their thinking stays disabled."
         },
         "zai.maxRetries": {
           "type": "number",
@@ -136,7 +147,7 @@
         "zai.defaultModel": {
           "type": "string",
           "default": "",
-          "description": "Model id to mark as the default selection in the Copilot Chat model picker (e.g. `glm-5.2`). Leave empty to not mark any model as the default — users can still pick any model manually."
+          "description": "Model id to mark as the default selection in the Copilot Chat model picker (e.g. `glm-5.3`). Leave empty to not mark any model as the default — users can still pick any model manually."
         },
         "zai.showUsageStatusBar": {
           "type": "boolean",
@@ -190,8 +201,8 @@
         },
         "zai.research.synthesisModel": {
           "type": "string",
-          "default": "glm-5.2",
-          "description": "Z.AI model used for planning queries and synthesizing the final research report. Use a high-context model (e.g. glm-5.2 with 1M context) for deep research."
+          "default": "glm-5.3",
+          "description": "Z.AI model used for planning queries and synthesizing the final research report. Use a high-context model (e.g. glm-5.3 with 1M context) for deep research."
         },
         "zai.research.webSearchToolName": {
           "type": "string",

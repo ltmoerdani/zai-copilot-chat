@@ -95,6 +95,8 @@ interface ApiSettings {
   debugReasoning: boolean;
   requestTimeout: number;
   maxRetries: number;
+  /** reasoning_effort for models whose thinking cannot be disabled (glm-5.3+). */
+  reasoningEffort: "low" | "high" | "max";
 }
 
 interface BaseModelLimits {
@@ -122,6 +124,7 @@ const DEFAULT_MODEL_LIMITS: BaseModelLimits = {
 // https://docs.bigmodel.cn/cn/guide/start/model-overview
 const MODEL_LIMITS: Record<string, BaseModelLimits> = {
   // Text models — 1M context
+  "glm-5.3":        { contextWindow: 1000000, maxOutputTokens: 128000 },
   "glm-5.2":        { contextWindow: 1000000, maxOutputTokens: 128000 },
   // Text models — 200K context
   "glm-5.1":        { contextWindow: 200000, maxOutputTokens: 128000 },
@@ -144,8 +147,21 @@ const MODEL_LIMITS: Record<string, BaseModelLimits> = {
 
 const VISION_MODELS = new Set(["glm-5v-turbo", "glm-4.6v", "glm-4.6v-flash"]);
 
+/**
+ * Models whose thinking cannot be disabled.
+ *
+ * GLM-5.3 removed `thinking.type: "disabled"` — thinking is always enabled and
+ * controlled via `reasoning_effort` (`low` | `high` | `max`, server default `max`).
+ * Sending `disabled`/`none` to these models makes the request FAIL.
+ * https://docs.bigmodel.cn/cn/guide/models/text/glm-5.3
+ */
+function isAlwaysThinkingModel(modelId: string): boolean {
+  return modelId.startsWith("glm-5.3");
+}
+
 const BUNDLED_MODELS = [
   // Text models — 1M context
+  "glm-5.3",
   "glm-5.2",
   // Text models — 200K
   "glm-5.1",
@@ -1126,7 +1142,7 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
       const isFlagship = (MODEL_LIMITS[model.id]?.contextWindow ?? 0) >= 200000;
       const friendlyMsg = isTimeout
         ? `Z.AI request to ${model.id} timed out. ${isFlagship
-            ? `glm-5.2 / glm-5.1 / glm-5 / glm-4.7 are large-context flagship models (200K–1M) and need longer timeouts (default 3 min, inactivity 90-180s).`
+            ? `glm-5.3 / glm-5.2 / glm-5.1 / glm-5 / glm-4.7 are large-context flagship models (200K–1M) and need longer timeouts (default 3 min, inactivity 90-180s). Note: glm-5.3 always thinks — lowering \`zai.reasoningEffort\` also reduces latency.`
             : ``
           } Try: (1) retry — Z.AI servers may be under load, (2) increase \`zai.requestTimeout\` in Settings (max 300000ms), (3) try a smaller/faster model like \`glm-4.5-flash\`, or (4) clear chat history to reduce context size. Detail: ${message}`
         : `Z.AI request failed: ${message}`;
@@ -1231,15 +1247,28 @@ async function streamChatCompletions(
     ...(tools.length ? { tools, tool_choice: toolChoice(options.toolMode) } : {})
   };
 
-  // Z.AI GLM models: thinking is ENABLED by default (especially on Coding Plan endpoint).
-  // We must explicitly disable it to prevent reasoning_content from leaking into the chat.
-  // Multi-layer defense:
+  // Z.AI GLM models: thinking control differs per generation.
+  //
+  // GLM ≤ 5.2: thinking is ENABLED by default (especially on Coding Plan
+  // endpoint). We explicitly disable it to prevent reasoning_content from
+  // leaking into the chat. Multi-layer defense:
   //   1. thinking.type = "disabled"  — primary switch (all GLM-4.5+ models)
   //   2. reasoning_effort = "none"   — backup for GLM-5.2+ (docs: "none" = model skips thinking)
   //   3. clear_thinking = true       — don't preserve reasoning in context (Coding Plan default)
+  //
+  // GLM-5.3+: thinking can NO LONGER be disabled — `thinking.type: "disabled"`
+  // and `reasoning_effort: "none"` are rejected and the request FAILS. We keep
+  // thinking enabled and steer depth via `reasoning_effort` (low | high | max,
+  // user-configurable via `zai.reasoningEffort`). reasoning_content is still
+  // captured by the extractor (never rendered; debug logging via `zai.debugReasoning`).
   if (modelId.startsWith("glm-")) {
-    requestBody.thinking = { type: "disabled", clear_thinking: true };
-    requestBody.reasoning_effort = "none";
+    if (isAlwaysThinkingModel(modelId)) {
+      requestBody.thinking = { type: "enabled", clear_thinking: true };
+      requestBody.reasoning_effort = settings.reasoningEffort;
+    } else {
+      requestBody.thinking = { type: "disabled", clear_thinking: true };
+      requestBody.reasoning_effort = "none";
+    }
   }
 
   output.appendLine(`[${new Date().toISOString()}] Token budget: model=${modelId} input≈${estimatedInputTokens} maxOut=${requestMaxTokens} (contextWindow=${limits.contextWindow}, budgetUsed=${estimatedInputTokens + requestMaxTokens})`);
@@ -1449,7 +1478,7 @@ async function doStreamFetch(
   const cancellation = token.onCancellationRequested(() => controller.abort());
 
   // Per-model timeout scaling.
-  // Flagship large-context models (glm-5.2 at 1M, glm-5.1/glm-5/glm-5-turbo/glm-4.7 at 200K) have
+  // Flagship large-context models (glm-5.3/glm-5.2 at 1M, glm-5.1/glm-5/glm-5-turbo/glm-4.7 at 200K) have
   // longer cold-start and per-token latency — they need a more generous
   // inactivity threshold. Use a 1.5x multiplier for 200K+ models, 1x otherwise.
   const modelId = typeof body === "object" && body !== null && "model" in body
@@ -2131,6 +2160,7 @@ function parseToolInput(value: string): object {
 
 function getSettings(): ApiSettings {
   const config = vscode.workspace.getConfiguration("zai");
+  const reasoningEffort = config.get<"low" | "high" | "max">("reasoningEffort", "high");
 
   return {
     temperature: config.get("temperature", 0.2),
@@ -2138,7 +2168,8 @@ function getSettings(): ApiSettings {
     maxInputTokensOverride: config.get("maxInputTokens", 0),
     debugReasoning: config.get("debugReasoning", false),
     requestTimeout: config.get("requestTimeout", 120000),
-    maxRetries: config.get("maxRetries", 2)
+    maxRetries: config.get("maxRetries", 2),
+    reasoningEffort: ["low", "high", "max"].includes(reasoningEffort) ? reasoningEffort : "high"
   };
 }
 
