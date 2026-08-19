@@ -2,7 +2,7 @@
   "name": "zai-copilot-chat",
   "displayName": "Z.AI Copilot Chat: BYOK 14+ GLM Models",
   "description": "Use 14+ Z.AI GLM models (GLM-5.3 flagship 1M context, GLM-5.2, GLM-4.7, free Flash + Vision models) in GitHub Copilot Chat. BYOK, no Copilot Pro needed. Includes @z-research deep-research agent.",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "publisher": "ltmoerdani",
   "license": "MIT",
   "icon": "media/zai.png",
@@ -91,6 +91,18 @@
       {
         "command": "zai.toggleQuotaView",
         "title": "Z.AI: Toggle Quota View"
+      },
+      {
+        "command": "zai.vision.setup",
+        "title": "Z.AI: Setup Vision Bridge"
+      },
+      {
+        "command": "zai.vision.status",
+        "title": "Z.AI: Vision Bridge Status"
+      },
+      {
+        "command": "zai.setReasoningEffort",
+        "title": "Z.AI: Set Reasoning Effort"
       }
     ],
     "configuration": {
@@ -130,12 +142,21 @@
         "zai.reasoningEffort": {
           "type": "string",
           "enum": [
+            "off",
             "low",
+            "medium",
             "high",
             "max"
           ],
-          "default": "high",
-          "description": "Reasoning effort for models whose thinking cannot be disabled (GLM-5.3+): `low` = lightweight, `high` = enhanced, `max` = deepest (slowest, most tokens). Older models are unaffected — their thinking stays disabled."
+          "enumDescriptions": [
+            "Thinking disabled (glm-5.3 maps to 'low' — it cannot disable thinking)",
+            "Lightweight reasoning — cheapest for chat/Q&A",
+            "Balanced (glm-5.2 accepts it; glm-5.3 runs 'high'; glm ≤ 5.1 just enables thinking)",
+            "Enhanced reasoning — good default for coding",
+            "Deepest reasoning (server default) — slowest, most tokens"
+          ],
+          "default": "off",
+          "markdownDescription": "Reasoning effort for GLM models, translated per generation:\n\n| Level | glm-5.3+ (forced thinking) | glm-5.2 | glm ≤ 5.1 (toggle only) |\n| --- | --- | --- | --- |\n| `off` | `reasoning_effort: low` | `thinking: disabled` | `thinking: disabled` |\n| `low` | `low` | `low` | thinking on |\n| `medium` | `high` (no medium on 5.3) | `medium` (server maps to high) | thinking on |\n| `high` | `high` | `high` | thinking on |\n| `max` | `max` | `max` | thinking on |\n\nReasoning tokens are billed as output, so lowering this is the single biggest quota saver. Changing it takes effect on the next request — no reload needed."
         },
         "zai.maxRetries": {
           "type": "number",
@@ -213,6 +234,75 @@
           "type": "string",
           "default": "webReader",
           "description": "VS Code tool name for the Z.AI Web Reader MCP server. The default matches the camelCase form VS Code exposes (e.g. `mcp_web-reader-se_webReader`). Override if VS Code's MCP tool name format changes."
+        },
+        "zai.visionBridge.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Beta: give text-only GLM models image understanding. Attached/pasted images are converted to structured text evidence (OCR, layout, semantics) by the modlens CLI (https://github.com/liustack/modlens) before each request — the Z.AI endpoint still only receives text. Requires `modlens` installed (`npm i -g @liustack/modlens`); run 'Z.AI: Setup Vision Bridge' first. When enabled, all GLM models advertise image input."
+        },
+        "zai.visionBridge.bin": {
+          "type": "string",
+          "default": "modlens",
+          "description": "modlens executable. Accepts a bare command (`modlens`), an absolute path, or a command with leading args (`npx -y @liustack/modlens@3.18.3`). Requires Node.js >= 22.19 on your PATH."
+        },
+        "zai.visionBridge.npxBypass": {
+          "type": "boolean",
+          "default": true,
+          "description": "When the configured `bin` is unavailable (e.g. modlens not installed globally), automatically fetch modlens through npx on first use and auto-provision a vision engine. Set false to require a manual install."
+        },
+        "zai.visionBridge.autoReuse": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "opencode",
+              "codex",
+              "claude",
+              "pi",
+              "grok"
+            ]
+          },
+          "default": [
+            "opencode",
+            "codex"
+          ],
+          "description": "Agent CLIs the bridge may auto-grant (`modlens config set reuse.<harness> true`) to reuse their existing vision model — the zero-API-key path. Only CLIs actually discovered on this machine are granted. Add `claude`/`pi`/`grok` to allow reusing those paid subscriptions (they are excluded by default for consent)."
+        },
+        "zai.visionBridge.provider": {
+          "type": "string",
+          "default": "",
+          "description": "Pin one modlens vision engine (`gemini-api`, `openai`, `anthropic`, `antigravity-cli`, `claude-cli`, `kimi-cli`). Leave empty to use modlens' failover chain (fast API providers first, signed-in agent CLIs as backup)."
+        },
+        "zai.visionBridge.timeoutMs": {
+          "type": "number",
+          "default": 120000,
+          "minimum": 10000,
+          "maximum": 300000,
+          "description": "Per-image read timeout passed to modlens (its own default is 180000). The first read of an image takes 5–10s on API engines, 15–45s on agent CLIs; cached reads are instant."
+        },
+        "zai.visionBridge.maxEvidenceChars": {
+          "type": "number",
+          "default": 16000,
+          "minimum": 2000,
+          "maximum": 200000,
+          "description": "Hard cap for one image's evidence block injected into the conversation (summary, OCR, layout, entities…). Protects smaller-context models from oversized dumps."
+        },
+        "zai.visionBridge.announce": {
+          "type": "boolean",
+          "default": true,
+          "description": "Emit a short '👁 Reading N attached image(s)…' note while the vision bridge runs, so slow first reads are explained. Turn off for silent operation."
+        },
+        "zai.visionBridge.promptTemplate": {
+          "type": "string",
+          "default": "",
+          "description": "Optional focus prompt forwarded to the vision engine for every image (modlens `--prompt`), e.g. 'focus on UI text and error messages'. Empty = modlens' default full transcription."
+        },
+        "zai.visionBridge.cacheTtlHours": {
+          "type": "number",
+          "default": 24,
+          "minimum": 0,
+          "maximum": 720,
+          "description": "How long persistent image-evidence cache entries stay valid, in hours. 0 = never expire. VS Code replays the whole conversation every turn, so caching keeps follow-ups from re-reading (and re-billing) images you already sent."
         }
       }
     },
@@ -249,7 +339,7 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "tsc -p ./ && node --test out/test/**/*.test.js",
+    "test": "tsc -p ./ && node --test out/test/*.test.js out/test/*/*.test.js",
     "package": "vsce package",
     "install-local": "vsce package && code --install-extension *.vsix --force",
     "vscode:prepublish": "npm run compile"

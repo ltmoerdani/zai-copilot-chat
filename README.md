@@ -40,7 +40,7 @@ You already love Copilot Chat. Now imagine it powered by Z.AI's GLM models — a
 | 🌍 **Models** | 14+ GLM models: GLM-5.3, GLM-5.2, GLM-5.1, GLM-5, GLM-4.7, GLM-4.6, GLM-4.5, Air, AirX |
 | 🤖 **Agent Mode** | `@z-research` deep-research agent with dozens of cited sources |
 | 🧠 **1M context** | GLM-5.3 / GLM-5.2 hold ~1 million tokens — paste an entire repo or a book chapter |
-| 💭 **Reasoning control** | GLM-5.3 always thinks — steer depth via `zai.reasoningEffort` (`low` / `high` / `max`) |
+| 💭 **Reasoning control** | Pick thinking depth per task via `zai.reasoningEffort` — `off` / `low` / `medium` / `high` / `max`, translated per GLM generation |
 | 👁️ **Vision** | GLM-5V-Turbo, GLM-4.6V, GLM-4.6V-Flash read screenshots and diagrams |
 | 🆓 **Free models** | `glm-4.5-flash` (text) and `glm-4.6v-flash` (vision) are $0 on Z.AI |
 | 🔒 **Key storage** | Your API key is stored in VS Code SecretStorage, never sent anywhere but Z.AI |
@@ -74,7 +74,7 @@ You pick a Z.AI GLM model from the Copilot Chat model picker the same way you wo
 
 | Model | Context | Max Output | Vision | Description |
 |---|---:|---:|:---:|---|
-| **GLM-5.3** | 1M | 128K | ❌ | Newest flagship — coding +50% vs GLM-5.2, emergent cybersecurity skills. **Always thinks** (`zai.reasoningEffort`: low/high/max) |
+| **GLM-5.3** | 1M | 128K | ❌ | Newest flagship — coding +50% vs GLM-5.2, emergent cybersecurity skills. **Always thinks** (`off`/`medium` map to `low`/`high`) |
 | **GLM-5.2** | 1M | 128K | ❌ | Previous flagship, 1M context window, focused on coding and long-horizon tasks (auto-routed to GLM-5.3 by the Coding Plan) |
 | **GLM-5.1** | 200K | 128K | ❌ | Flagship tuned for long-horizon tasks |
 | **GLM-5** | 200K | 128K | ❌ | Latest GLM generation with agentic planning |
@@ -234,6 +234,7 @@ For advanced usage, you can also run these commands via the Command Palette (`Cm
 | `Z.AI: Manage Provider` | Manage API key, refresh models, or test connection |
 | `Z.AI: Set API Key` | Store or update your Z.AI API key (stored in VS Code SecretStorage, per-device) |
 | `Z.AI: Show Quota` | Open a detailed markdown report of all quota windows |
+| `Z.AI: Set Reasoning Effort` | QuickPick the thinking depth (`off`–`max`) with cost hints — applies to the next request, no reload needed |
 | `Z.AI: Toggle Quota View` | Switch the status bar between 5-hour and weekly display |
 | `Z.AI: Diagnostics` | Show a markdown report of all registered Z.AI models |
 
@@ -265,7 +266,7 @@ The quota is fetched from `https://api.z.ai/api/monitor/usage/quota/limit` and a
 | `zai.maxInputTokens` | `number` | `0` | Context window override. `0` uses the per-model bundled context size. |
 | `zai.debugReasoning` | `boolean` | `false` | Write provider `reasoning_content` to **Output → Z.AI** for debugging |
 | `zai.requestTimeout` | `number` | `180000` | Connection timeout in ms. Auto-scaled **1.5×** for 200K flagship models (glm-5.3/5.2/5.1/5/4.7) and capped at 300000ms. Inactivity timer scales the same way (90–180s window). |
-| `zai.reasoningEffort` | `string` | `high` | Reasoning effort for GLM-5.3+ (thinking cannot be disabled): `low` = lightweight, `high` = enhanced, `max` = deepest (slowest, most tokens). Older models keep thinking disabled. |
+| `zai.reasoningEffort` | `string` | `off` | Thinking depth for GLM models, translated per generation: **`off`** disables thinking (glm-5.3 maps to `low` — it cannot disable thinking), **`low`** lightweight, **`medium`** balanced (5.3 runs `high`), **`high`** enhanced — good default for coding, **`max`** deepest (slowest, most tokens). Reasoning is billed as output, so lowering this is the biggest quota saver. See [`doc/reasoning-effort-picker.md`](./doc/reasoning-effort-picker.md). |
 | `zai.maxRetries` | `number` | `2` | Automatic retries on transient network errors (fetch failed, timeout, 5xx, 429) with exponential backoff (1s → 2s → max 10s + jitter). |
 | `zai.defaultModel` | `string` | `""` | Model id to mark as the default selection in the Copilot Chat model picker (for example `glm-5.3`). Leave empty to mark no model as default; users can still pick any model manually. |
 | `zai.showUsageStatusBar` | `boolean` | `true` | Show the latest Z.AI usage summary (prompt→output tokens) in the VS Code status bar after each response. |
@@ -298,7 +299,7 @@ If you want to configure a different model for utility tasks, set `chat.utilityS
 
 ### "Request timed out for glm-5.1" / "Connection timed out after …"
 
-Flagship 200K-context models (`glm-5.3`, `glm-5.2`, `glm-5.1`, `glm-5`, `glm-5-turbo`, `glm-4.7`) have noticeably higher cold-start latency than the smaller models. On long or busy sessions they can take 60 to 120s to send the **first token**. GLM-5.3 additionally **always thinks** — if responses feel slow, lower `zai.reasoningEffort` from `high` to `low`.
+Flagship 200K-context models (`glm-5.3`, `glm-5.2`, `glm-5.1`, `glm-5`, `glm-5-turbo`, `glm-4.7`) have noticeably higher cold-start latency than the smaller models. On long or busy sessions they can take 60 to 120s to send the **first token**. GLM-5.3 additionally **always thinks** — if responses feel slow (or the quota drains fast), lower `zai.reasoningEffort` (default `off`; glm-5.3 runs it as `low`).
 
 **The extension already mitigates this automatically:**
 

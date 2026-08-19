@@ -2,6 +2,51 @@
 
 All notable changes to the **Z.AI Copilot Chat** extension are documented here.
 
+## 0.6.0 — 2026-08-19
+
+### Added
+
+- **Vision bridge (beta) — images for every GLM model via modlens** — text-only GLM models (and the `-v` models, whose pixels the coding endpoint actually rejects) can now "see" images pasted or attached in Copilot Chat. Attached images are converted to structured text evidence (summary, OCR, layout regions, entities/relations, uncertainty) by the [modlens](https://github.com/liustack/modlens) CLI before each request; the Z.AI endpoint still receives pure text, so request compatibility is unchanged. Opt-in via `zai.visionBridge.enabled`; run **Z.AI: Setup Vision Bridge** first (checks `modlens --version` + `modlens doctor`, guides engine setup, enables the setting). Evaluation + architecture: [`doc/modlens-vision-bridge-evaluation.md`](./doc/modlens-vision-bridge-evaluation.md).
+
+- **Seamless first-run (npx bypass + auto-provision)** — when the configured `bin` is unavailable (modlens not installed globally), the bridge automatically fetches modlens through npx on first use (`zai.visionBridge.npxBypass`, default on), then auto-provisions a vision engine: it runs `modlens doctor --json`, and if a local agent CLI (opencode/codex) already holds vision it grants `reuse.<harness>` automatically (`zai.visionBridge.autoReuse`, default `["opencode","codex"]`). This is the zero-API-key path — no manual install, no Gemini key needed when a reusable CLI exists. Paid-subscription reuse (`claude`/`pi`/`grok`) stays opt-in for consent.
+
+- **Two-tier image-evidence cache** — memory LRU (64 entries) + persistent JSON sidecars in `globalStorage/vision-cache/`, keyed by `sha256(image bytes + prompt override)` with a 24 h TTL (`zai.visionBridge.cacheTtlHours`). VS Code replays the whole conversation every turn, so caching is what keeps follow-up messages from re-reading (and re-billing) images you already sent.
+
+- **`Z.AI: Setup Vision Bridge` command** — probes modlens through npx (works even with no global install), runs `modlens doctor --json`, renders a readiness report (engine state, reusable CLIs, install/engine instructions), and enables the bridge with a one-click window reload.
+
+- **`Z.AI: Vision Bridge Status` command** — settings summary plus cache stats (memory hits/misses/evictions, persistent entries and size).
+
+- **9 new `zai.visionBridge.*` settings** — `enabled`, `bin`, `npxBypass`, `autoReuse`, `provider`, `timeoutMs` (120 s default), `maxEvidenceChars` (16 000 default), `announce`, `promptTemplate`, `cacheTtlHours`.
+
+- **Reasoning-effort picker with `off` / `low` / `medium` / `high` / `max`** — the single biggest quota lever, now user-selectable per request. Previously only `low|high|max` existed and only affected glm-5.3, with thinking force-disabled everywhere else. The new `zai.reasoningEffort` setting (default `off`) is translated per model generation by the new pure `src/reasoning.ts` module, following the same dialect table z.ai documents ([concept-param](https://docs.z.ai/guides/overview/concept-param.md)):
+
+  | Level | glm-5.3+ (forced thinking) | glm-5.2 | glm ≤ 5.1 (toggle only) |
+  | --- | --- | --- | --- |
+  | `off` | `reasoning_effort: low` (5.3 rejects `disabled`) | `thinking: disabled` | `thinking: disabled` |
+  | `low` | `low` | `low` | thinking on |
+  | `medium` | `high` (5.3 has no medium) | `medium` (server maps to high) | thinking on |
+  | `high` | `high` | `high` | thinking on |
+  | `max` | `max` | `max` | thinking on |
+
+  Whenever a level had to be translated (e.g. `off` on glm-5.3), a note is written to the Z.AI output channel so the mapping is never silent.
+
+- **`Z.AI: Set Reasoning Effort` command** — QuickPick with cost-oriented descriptions for each level; persists globally and applies to the next request (no reload needed).
+
+### Changed
+
+- **Image-input capability advertisement** — with the vision bridge enabled, all GLM models advertise `imageInput`/`supportsImageToText` so VS Code shows the attach/paste UI (without this the bridge could never fire — the same trap Codex hits with `input_modalities: ["text"]`). Toggling the setting fires a provider model-list refresh; a window reload makes the picker pick it up immediately.
+
+- **Images are never silently dropped when the bridge is on** — if a read fails (modlens missing, engine timeout, quota), a short notice replaces the image so the model knows an image exists and can tell the user honestly, plus a once-per-session warning toast with a Set Up action. When auto-provision is pending, the notice asks the user to re-send so the freshly-provisioned engine can read it. The chat request itself never breaks.
+
+- **Default reasoning effort is now `off`** — glm-5.2 and below keep the exact request shape they always had (thinking disabled); glm-5.3 drops from `high` to `low`, which is the official z.ai migration target for disabled thinking and the biggest quota saver on the always-thinking flagship. Pick `high`/`max` when you want full-depth coding reasoning.
+
+### Technical
+
+- New `src/vision/` module family following the repo's pure/wrapper convention: `modlensTypes.ts` (schema v2 types + defensive normalizer), `modlensArgs.ts` (CLI argv + bin resolution), `modlensOutput.ts` (parser + budgeted evidence formatter with prompt-injection trust note), `modlensDoctor.ts` (doctor parser + reuse-target selection), `evidenceCache.ts` (pure LRU/TTL cache) — all `vscode`-free and unit-tested; `visionBridge.ts` is the only VS Code-aware file (request pre-pass, subprocess spawning with timeout/cancellation, 3-way semaphore, npx bypass + auto-provision, sidecar persistence).
+- 45 new unit tests (`src/test/vision/`).
+- New pure module `src/reasoning.ts` (`resolveReasoningParams`, `isReasoningEffort`, `REASONING_EFFORTS`) — `vscode`-free, doc-evidence-annotated, unit-tested in `src/test/reasoning.test.ts` (generation matrix incl. glm-5.3 variants, glm-5.2 extended values, toggle-only models, non-GLM passthrough). Feature doc: [`doc/reasoning-effort-picker.md`](./doc/reasoning-effort-picker.md).
+- Fixed the test npm script glob (`out/test/**/*.test.js` is not recursive under `sh`), so top-level test files (`quota`, `apiKeyState`, `reasoning`) actually run — the full suite is genuinely 151 passing, not 118.
+
 ## 0.5.0 — 2026-08-15
 
 ### Added

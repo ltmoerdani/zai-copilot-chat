@@ -26,10 +26,21 @@ import {
 } from "./quota";
 import { registerResearchFeatures } from "./research";
 import {
+  getVisionBridge,
+  isVisionBridgeEnabled,
+  runVisionSetup,
+  runVisionStatus,
+} from "./vision/visionBridge";
+import {
   collectConfiguredApiKeysFromInspect,
   hasAnyKnownApiKey,
   planApiKeyClear,
 } from "./apiKeyState";
+import {
+  isReasoningEffort,
+  resolveReasoningParams,
+  type ReasoningEffort,
+} from "./reasoning";
 
 const VENDOR = "zai";
 const SECRET_KEY = "zai.apiKey";
@@ -95,8 +106,8 @@ interface ApiSettings {
   debugReasoning: boolean;
   requestTimeout: number;
   maxRetries: number;
-  /** reasoning_effort for models whose thinking cannot be disabled (glm-5.3+). */
-  reasoningEffort: "low" | "high" | "max";
+  /** User reasoning level (off/low/medium/high/max), translated per model generation. */
+  reasoningEffort: ReasoningEffort;
 }
 
 interface BaseModelLimits {
@@ -222,6 +233,13 @@ export function activate(context: vscode.ExtensionContext) {
         void provider.refreshQuotaFromSecret();
       }
     }),
+    vscode.commands.registerCommand("zai.setReasoningEffort", () =>
+      void showReasoningEffortPicker(),
+    ),
+    vscode.commands.registerCommand("zai.vision.setup", () =>
+      runVisionSetup(context, () => provider.refreshModels()),
+    ),
+    vscode.commands.registerCommand("zai.vision.status", () => runVisionStatus(context)),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration("zai.showUsageStatusBar")) {
         resetUsageStatusBar();
@@ -234,6 +252,11 @@ export function activate(context: vscode.ExtensionContext) {
       }
       if (event.affectsConfiguration("zai.experimentalContextIndicator")) {
         void syncExperimentalContextIndicator();
+      }
+      // Toggling the vision bridge changes the advertised imageInput capability
+      // for every model — force VS Code to re-query the provider's model list.
+      if (event.affectsConfiguration("zai.visionBridge.enabled")) {
+        provider.refreshModels();
       }
     }),
     // Repaint the quota donut SVG immediately when the color theme changes,
@@ -1085,7 +1108,17 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
       throw new Error("Z.AI API key is required. Use the Z.AI gear icon in Language Models to configure it, then reload the window.");
     }
 
-    const apiMessages = normalizeMessages(messages.flatMap((message) => convertMessage(message, this.reasoningContentByToolCallId)));
+    // Vision bridge pre-pass (modlens): convert image DataParts to structured
+    // text evidence BEFORE convertMessage() strips them. The Z.AI coding
+    // endpoint only accepts content.type "text", so without this step pasted
+    // images are silently dropped. Never breaks the request on failure.
+    let effectiveMessages: readonly vscode.LanguageModelChatRequestMessage[] = messages;
+    if (isVisionBridgeEnabled()) {
+      const bridge = getVisionBridge(this.context);
+      effectiveMessages = await bridge.processMessages(messages, token, progress);
+    }
+
+    const apiMessages = normalizeMessages(effectiveMessages.flatMap((message) => convertMessage(message, this.reasoningContentByToolCallId)));
     const settings = getSettings();
     const limits = modelLimits(model.id, settings);
     const localRequestId = crypto.randomUUID();
@@ -1154,6 +1187,11 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
 
       throw error;
     }
+  }
+
+  /** Force VS Code to re-query the model list (capabilities, limits, ids). */
+  refreshModels(): void {
+    this.changeEmitter.fire();
   }
 
   async provideTokenCount(
@@ -1247,28 +1285,24 @@ async function streamChatCompletions(
     ...(tools.length ? { tools, tool_choice: toolChoice(options.toolMode) } : {})
   };
 
-  // Z.AI GLM models: thinking control differs per generation.
-  //
-  // GLM ≤ 5.2: thinking is ENABLED by default (especially on Coding Plan
-  // endpoint). We explicitly disable it to prevent reasoning_content from
-  // leaking into the chat. Multi-layer defense:
-  //   1. thinking.type = "disabled"  — primary switch (all GLM-4.5+ models)
-  //   2. reasoning_effort = "none"   — backup for GLM-5.2+ (docs: "none" = model skips thinking)
-  //   3. clear_thinking = true       — don't preserve reasoning in context (Coding Plan default)
-  //
-  // GLM-5.3+: thinking can NO LONGER be disabled — `thinking.type: "disabled"`
-  // and `reasoning_effort: "none"` are rejected and the request FAILS. We keep
-  // thinking enabled and steer depth via `reasoning_effort` (low | high | max,
-  // user-configurable via `zai.reasoningEffort`). reasoning_content is still
-  // captured by the extractor (never rendered; debug logging via `zai.debugReasoning`).
-  if (modelId.startsWith("glm-")) {
-    if (isAlwaysThinkingModel(modelId)) {
-      requestBody.thinking = { type: "enabled", clear_thinking: true };
-      requestBody.reasoning_effort = settings.reasoningEffort;
-    } else {
-      requestBody.thinking = { type: "disabled", clear_thinking: true };
-      requestBody.reasoning_effort = "none";
-    }
+  // Z.AI GLM models: reasoning control is generation-aware — the user-level
+  // effort (`zai.reasoningEffort`: off/low/medium/high/max) is translated per
+  // model by `resolveReasoningParams` (src/reasoning.ts holds the dialect
+  // table + doc evidence):
+  //   glm-5.3+  forced thinking — off→low, medium→high (others pass through)
+  //   glm-5.2   thinking toggle + extended reasoning_effort ("none" skips thinking)
+  //   glm ≤ 5.1 thinking toggle only (reasoning_effort unsupported)
+  // reasoning_content is still captured by the extractor (never rendered;
+  // debug logging via `zai.debugReasoning`).
+  const reasoning = resolveReasoningParams(modelId, settings.reasoningEffort);
+  if (reasoning.thinking) {
+    requestBody.thinking = reasoning.thinking;
+  }
+  if (reasoning.reasoningEffort !== undefined) {
+    requestBody.reasoning_effort = reasoning.reasoningEffort;
+  }
+  if (reasoning.notice) {
+    output.appendLine(`[${new Date().toISOString()}] Reasoning: ${reasoning.notice}`);
   }
 
   output.appendLine(`[${new Date().toISOString()}] Token budget: model=${modelId} input≈${estimatedInputTokens} maxOut=${requestMaxTokens} (contextWindow=${limits.contextWindow}, budgetUsed=${estimatedInputTokens + requestMaxTokens})`);
@@ -2158,9 +2192,66 @@ function parseToolInput(value: string): object {
   }
 }
 
+/** QuickPick entries for the reasoning-effort picker (cheapest first). */
+const REASONING_EFFORT_ITEMS: ReadonlyArray<vscode.QuickPickItem & { effort: ReasoningEffort }> = [
+  {
+    effort: "off",
+    label: "$(circle-slash) Off",
+    description: "Thinking disabled — cheapest & fastest",
+    detail: "glm-5.2 and below: thinking fully disabled. glm-5.3 cannot disable thinking, so it runs at 'low' instead.",
+  },
+  {
+    effort: "low",
+    label: "$(zap) Low",
+    description: "Lightweight reasoning",
+    detail: "Big quota saver for chat, Q&A and simple edits. glm ≤ 5.1: thinking simply on (no effort levels).",
+  },
+  {
+    effort: "medium",
+    label: "$(pulse) Medium",
+    description: "Balanced reasoning",
+    detail: "glm-5.2: accepted (server maps to 'high'). glm-5.3: sent as 'high'. glm ≤ 5.1: thinking on.",
+  },
+  {
+    effort: "high",
+    label: "$(rocket) High",
+    description: "Enhanced reasoning",
+    detail: "Good default for coding tasks (previously the extension default for glm-5.3).",
+  },
+  {
+    effort: "max",
+    label: "$(flame) Max",
+    description: "Deepest reasoning (server default)",
+    detail: "Slowest and most tokens — reserve for hard problems.",
+  },
+];
+
+/** Command handler: pick a reasoning effort level and persist it globally. */
+async function showReasoningEffortPicker(): Promise<void> {
+  const config = vscode.workspace.getConfiguration("zai");
+  const currentRaw = config.get<unknown>("reasoningEffort", "off");
+  const current = isReasoningEffort(currentRaw) ? currentRaw : "off";
+
+  const picked = await vscode.window.showQuickPick(
+    REASONING_EFFORT_ITEMS.map((item) => ({ ...item, picked: item.effort === current })),
+    {
+      title: "Z.AI: Reasoning Effort",
+      placeHolder: "Select reasoning effort for GLM models (persists globally)",
+    },
+  );
+  if (!picked) {
+    return;
+  }
+
+  await config.update("reasoningEffort", picked.effort, vscode.ConfigurationTarget.Global);
+  void vscode.window.showInformationMessage(
+    `Z.AI reasoning effort set to '${picked.effort}'.`,
+  );
+}
+
 function getSettings(): ApiSettings {
   const config = vscode.workspace.getConfiguration("zai");
-  const reasoningEffort = config.get<"low" | "high" | "max">("reasoningEffort", "high");
+  const reasoningEffortRaw = config.get<unknown>("reasoningEffort", "off");
 
   return {
     temperature: config.get("temperature", 0.2),
@@ -2169,7 +2260,7 @@ function getSettings(): ApiSettings {
     debugReasoning: config.get("debugReasoning", false),
     requestTimeout: config.get("requestTimeout", 120000),
     maxRetries: config.get("maxRetries", 2),
-    reasoningEffort: ["low", "high", "max"].includes(reasoningEffort) ? reasoningEffort : "high"
+    reasoningEffort: isReasoningEffort(reasoningEffortRaw) ? reasoningEffortRaw : "off"
   };
 }
 
@@ -2217,11 +2308,17 @@ function positiveOverride(value: number): number | undefined {
 
 function modelCapabilities(modelId?: string): CopilotCompatibleCapabilities {
   const isVision = modelId ? VISION_MODELS.has(modelId) : false;
+  // With the vision bridge enabled, EVERY model accepts image input: images
+  // are converted to text evidence at request time (the coding endpoint stays
+  // text-only). Without this, VS Code hides the attach/paste UI and the
+  // bridge could never fire — the same trap Codex hits with
+  // input_modalities:["text"] blocking Ctrl+V for text-only models.
+  const bridgeEnabled = isVisionBridgeEnabled();
 
   return {
-    imageInput: isVision,
+    imageInput: isVision || bridgeEnabled,
     toolCalling: 128,
-    supportsImageToText: isVision,
+    supportsImageToText: isVision || bridgeEnabled,
     supportsToolCalling: true
   };
 }
