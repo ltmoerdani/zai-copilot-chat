@@ -1,8 +1,8 @@
 {
   "name": "zai-copilot-chat",
-  "displayName": "Z.AI Copilot Chat: BYOK 14+ GLM Models",
-  "description": "Use 14+ Z.AI GLM models (GLM-5.3 flagship 1M context, GLM-5.2, GLM-4.7, free Flash + Vision models) in GitHub Copilot Chat. BYOK, no Copilot Pro needed. Includes @z-research deep-research agent.",
-  "version": "0.6.0",
+"displayName": "Z.AI Copilot Chat: BYOK 15+ GLM Models",
+  "description": "Use 15+ Z.AI GLM models (GLM-5.3 flagship 1M context, GLM-5.3-Flash multimodal, GLM-5.2, GLM-4.7, free Flash + Vision models) in GitHub Copilot Chat. BYOK, no Copilot Pro needed. Includes @z-research deep-research agent.",
+  "version": "0.6.1",
   "publisher": "ltmoerdani",
   "license": "MIT",
   "icon": "media/zai.png",
@@ -22,6 +22,7 @@
     "language-models",
     "glm",
     "glm-5.3",
+    "glm-5.3-flash",
     "glm-5.2",
     "glm-4.7",
     "glm-5",
@@ -137,7 +138,7 @@
           "default": 180000,
           "minimum": 10000,
           "maximum": 300000,
-          "description": "Connection timeout in ms for API requests. During streaming, a separate inactivity timer (half this value, min 90s) aborts if no data arrives. Default 180000 (3 min) — flagship models like glm-5.3 (1M context) need longer cold start than smaller models."
+          "description": "Connection timeout in ms for API requests. During streaming, a separate inactivity timer (half this value, min 90s) aborts if no data arrives. Default 180000 (3 min) — flagship models like glm-5.3 / glm-5.3-flash (1M context) need longer cold start than smaller models."
         },
         "zai.reasoningEffort": {
           "type": "string",

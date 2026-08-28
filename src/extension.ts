@@ -137,6 +137,8 @@ const MODEL_LIMITS: Record<string, BaseModelLimits> = {
   // Text models — 1M context
   "glm-5.3":        { contextWindow: 1000000, maxOutputTokens: 128000 },
   "glm-5.2":        { contextWindow: 1000000, maxOutputTokens: 128000 },
+  // Vision models — 1M context
+  "glm-5.3-flash":  { contextWindow: 1000000, maxOutputTokens: 128000 },
   // Text models — 200K context
   "glm-5.1":        { contextWindow: 200000, maxOutputTokens: 128000 },
   "glm-5":          { contextWindow: 200000, maxOutputTokens: 128000 },
@@ -156,7 +158,7 @@ const MODEL_LIMITS: Record<string, BaseModelLimits> = {
   "glm-4.6v-flash": { contextWindow: 128000, maxOutputTokens: 32000 },
 };
 
-const VISION_MODELS = new Set(["glm-5v-turbo", "glm-4.6v", "glm-4.6v-flash"]);
+const VISION_MODELS = new Set(["glm-5.3-flash", "glm-5v-turbo", "glm-4.6v", "glm-4.6v-flash"]);
 
 /**
  * Models whose thinking cannot be disabled.
@@ -185,7 +187,9 @@ const BUNDLED_MODELS = [
   "glm-4.5-air",
   "glm-4.5-airx",
   "glm-4.5-flash",
-  // Vision models
+  // Vision models — 1M context
+  "glm-5.3-flash",
+  // Vision models — 200K/128K context
   "glm-5v-turbo",
   "glm-4.6v",
   "glm-4.6v-flash"

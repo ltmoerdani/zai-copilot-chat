@@ -2,14 +2,14 @@
 
 # 🧠 Z.AI for GitHub Copilot Chat
 
-### Use **14+ Z.AI GLM models** (GLM-5.3 flagship 1M context, GLM-5.2, GLM-4.7, free Flash + Vision) in GitHub Copilot Chat — **no Copilot Pro needed**
+### Use **15+ Z.AI GLM models** (GLM-5.3 flagship 1M context, GLM-5.2, GLM-4.7, free Flash + Vision) in GitHub Copilot Chat — **no Copilot Pro needed**
 
 **BYOK • Free tier included • Deep-research agent built in**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![VS Code](https://img.shields.io/badge/VS%20Code-1.120%2B-blue)](https://code.visualstudio.com/)
 [![Z.AI](https://img.shields.io/badge/Z.AI-GLM--5.3-4f46e5)](https://z.ai)
-[![Models](https://img.shields.io/badge/Models-14%2B-22c55e)](#-models)
+[![Models](https://img.shields.io/badge/Models-15%2B-22c55e)](#-models)
 [![Free Tier](https://img.shields.io/badge/Free%20Tier-Included-success)](#-models)
 
 **[Why bother](#-why-bother)** · **[Quick Start](#-quick-start)** · **[Models](#-models)** · **[Copilot vs This](#-github-copilot-vs-this-extension)** · **[Deep Research](#-deep-research)** · **[FAQ](#-faq)** · **[Community](#-community)**
@@ -37,11 +37,11 @@ You already love Copilot Chat. Now imagine it powered by Z.AI's GLM models — a
 | | What you get |
 |---|---|
 | 💸 **Cost** | Free GitHub account + Z.AI API key. No Copilot Pro ($10/mo) or Pro+ ($39/mo) needed |
-| 🌍 **Models** | 14+ GLM models: GLM-5.3, GLM-5.2, GLM-5.1, GLM-5, GLM-4.7, GLM-4.6, GLM-4.5, Air, AirX |
+| 🌍 **Models** | 15+ GLM models: GLM-5.3, GLM-5.2, GLM-5.1, GLM-5, GLM-4.7, GLM-4.6, GLM-4.5, Air, AirX |
 | 🤖 **Agent Mode** | `@z-research` deep-research agent with dozens of cited sources |
 | 🧠 **1M context** | GLM-5.3 / GLM-5.2 hold ~1 million tokens — paste an entire repo or a book chapter |
 | 💭 **Reasoning control** | Pick thinking depth per task via `zai.reasoningEffort` — `off` / `low` / `medium` / `high` / `max`, translated per GLM generation |
-| 👁️ **Vision** | GLM-5V-Turbo, GLM-4.6V, GLM-4.6V-Flash read screenshots and diagrams |
+| 👁️ **Vision** | GLM-5.3-Flash, GLM-5V-Turbo, GLM-4.6V, GLM-4.6V-Flash read screenshots and diagrams |
 | 🆓 **Free models** | `glm-4.5-flash` (text) and `glm-4.6v-flash` (vision) are $0 on Z.AI |
 | 🔒 **Key storage** | Your API key is stored in VS Code SecretStorage, never sent anywhere but Z.AI |
 | 🔓 **Open source** | MIT, readable code, contributions welcome |
@@ -68,7 +68,7 @@ You pay Z.AI per-token (or use the free Flash models). No middleman subscription
 
 ## What Is This?
 
-**Z.AI for GitHub Copilot Chat** is a VS Code extension that registers [Z.AI](https://z.ai) GLM models (including **GLM-5.3**, **GLM-5.2**, **GLM-5.1**, **GLM-5**, and **GLM-4.7**) into **GitHub Copilot Chat** through the official VS Code *Language Model Chat Provider API*.
+**Z.AI for GitHub Copilot Chat** is a VS Code extension that registers [Z.AI](https://z.ai) GLM models (including **GLM-5.3**, **GLM-5.3-Flash**, **GLM-5.2**, **GLM-5.1**, **GLM-5**, and **GLM-4.7**) into **GitHub Copilot Chat** through the official VS Code *Language Model Chat Provider API*.
 
 You pick a Z.AI GLM model from the Copilot Chat model picker the same way you would pick GPT-4 or Claude. Enter your Z.AI API key once, and that's it. No Copilot Pro or Enterprise subscription needed.
 
@@ -85,6 +85,7 @@ You pick a Z.AI GLM model from the Copilot Chat model picker the same way you wo
 | **GLM-4.5-Air** | 128K | 96K | ❌ | Better cost-to-performance ratio |
 | **GLM-4.5-AirX** | 128K | 96K | ❌ | Faster variant of GLM-4.5-Air |
 | **GLM-4.5-Flash** | 128K | 96K | ❌ | Free, fastest text model in the lineup |
+| **GLM-5.3-Flash** | 1M | 128K | ✅ | Native multimodal — 320B param, visual coding, always-thinking |
 | **GLM-5V-Turbo** | 200K | 128K | ✅ | Vision + coding base model |
 | **GLM-4.6V** | 128K | 32K | ✅ | Visual reasoning with tool calling |
 | **GLM-4.6V-Flash** | 128K | 32K | ✅ | Free vision model with tool calling |
@@ -420,6 +421,7 @@ VS Code and Copilot read separate input and output metadata fields for the UI. G
 | `glm-5.1` | 200K (204,800) | 128K (131,072) | ❌ |
 | `glm-4.5-air` | 128K (131,072) | 96K (98,304) | ❌ |
 | `glm-4.5-flash` | 128K (131,072) | 96K (98,304) | ❌ |
+| `glm-5.3-flash` | 1M (1,000,000) | 128K (131,072) | ✅ |
 | `glm-5v-turbo` | 200K (204,800) | 128K (131,072) | ✅ |
 | `glm-4.6v` | 128K (131,072) | 32K (32,768) | ✅ |
 | `glm-4.6v-flash` | 128K (131,072) | 32K (32,768) | ✅ |

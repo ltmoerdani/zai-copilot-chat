@@ -53,8 +53,9 @@ Sending that shape to `glm-5.3` fails outright. So adding the model id alone wou
 2. **`src/research/researchParticipant.ts`**
    - `DEFAULT_SYNTHESIS_MODEL` → `glm-5.3`.
    - `ZaiChatLLM.complete()` adds the always-on-thinking request shape with pinned `reasoning_effort: "low"` — research makes many small LLM calls (query planning + chunk summaries), so depth is wasted latency there.
-3. **`package.json`** — version 0.5.0, `zai.reasoningEffort` contribution, `synthesisModel`/`defaultModel`/`requestTimeout` copy updates, keyword `glm-5.3`, displayName "14+ GLM Models".
+3. **`package.json`** — version 0.5.1, `zai.reasoningEffort` contribution, `synthesisModel`/`defaultModel`/`requestTimeout` copy updates, keyword `glm-5.3` + `glm-5.3-flash`, displayName "15+ GLM Models".
 4. **`README.md`** — model table row, badges, settings table, troubleshooting, bundled-limits table.
+5. **GLM-5.3-Flash** (`glm-5.3-flash`) — added in v0.5.1 as a bundled vision model: 1M context, 128K max output, always-thinking, native multimodal input. See [CHANGELOG](../CHANGELOG.md).
 
 ## 4. Design decisions
 

@@ -2,6 +2,16 @@
 
 All notable changes to the **Z.AI Copilot Chat** extension are documented here.
 
+## 0.6.1 — 2026-08-28
+
+### Added
+
+- **GLM-5.3-Flash support** — GLM-5.3-Flash (model ID `glm-5.3-flash`) is the first native multimodal model in the GLM-5 series: 320B total / 18B activated params, 1M context, 128K max output, visual coding loop, and Office/document task support. Registered as a bundled vision model alongside GLM-5V-Turbo and GLM-4.6V. Always-thinking semantics apply (same `reasoning_effort` control as GLM-5.3). Available on the GLM Coding Plan with 3× the quota of GLM-5.3.
+
+### Changed
+
+- **Model count** — 15+ Z.AI GLM models bundled (was 14+).
+
 ## 0.6.0 — 2026-08-19
 
 ### Added
