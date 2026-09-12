@@ -101,6 +101,7 @@ You pick a Z.AI GLM model from the Copilot Chat model picker the same way you wo
 - **Tool calling.** Tool schemas are forwarded using OpenAI‑compatible chat completions, so agents keep working.
 - **Reasoning debug.** Opt‑in `reasoning_content` logging to the Z.AI output channel, for when you want to see the model think out loud.
 - **One‑click diagnostics.** A markdown report showing exactly which models VS Code has registered.
+- **Vision bridge (beta).** Text-only GLM models can "see" images: the modlens CLI converts attached/pasted images into structured text evidence before each request. Run **`Z.AI: Setup Vision Bridge`** once, then turn it on or off anytime with **`Z.AI: Toggle Vision Bridge`** — no reload needed to disable. Native vision models (glm-5.3-flash, -v models) receive images inline with no setup. See [Vision & Images](#-vision--images) below.
 - **Deep research agent.** The `@z-research` chat participant runs Z.AI's MCP Web Search and Web Reader across several iterations to produce a cited research report. See [Deep Research](#-deep-research) below.
 - **Progress you can actually see.** Each completed search query is pushed to the chat as a progress update, not one big batch at the end.
 - **Built to survive Z.AI's quirks.** The extension handles double‑encoded JSON responses, retries on rate‑limit (429) with exponential backoff, and enforces a per‑call timeout so a single hung MCP call can't freeze your run.
@@ -108,7 +109,45 @@ You pick a Z.AI GLM model from the Copilot Chat model picker the same way you wo
 
 ---
 
-## 🔬 Deep Research
+## 👁 Vision & Images
+
+The Z.AI coding endpoint only accepts text — every other BYOK provider can forward image bytes, but here a pasted screenshot would be silently dropped. The vision bridge closes that gap: before each request, the [modlens](https://github.com/liustack/modlens) CLI reads the image and returns structured text evidence (summary, OCR, layout regions, entities/relations, uncertainty) which is injected into the conversation. The endpoint still receives pure text, so request compatibility is unchanged.
+
+```mermaid
+flowchart LR
+    U["Paste/attach image"] --> B{"Vision bridge enabled?"}
+    B -- no --> S["Image stripped (text-only)"]
+    B -- yes --> Cache{"Evidence cache hit?"}
+    Cache -- yes --> E["Inject cached evidence"]
+    Cache -- no --> M["modlens reads image<br/>(5-45s first read)"]
+    M --> E
+    E --> A["Z.AI endpoint receives text"]
+```
+
+**First-time setup:** run **`Z.AI: Setup Vision Bridge`**. It probes modlens through npx (a global install is optional — the bridge auto-fetches `@liustack/modlens` on first use), checks for a usable vision engine, and auto-grants a reusable agent CLI (opencode/codex) that already has vision — the zero-API-key path. A free Gemini key (`modlens config set gemini-api.apiKey`) is the recommended API engine.
+
+**Turning it off:** run **`Z.AI: Toggle Vision Bridge`**. Images are no longer read — no "👁 Reading N attached image(s)…" note, no modlens latency — and the change takes effect on the next request. Toggle again to re-enable (the evidence cache and engine config survive the cycle).
+
+**Failure is graceful:** if modlens is missing, times out, or its engine errors, a short notice replaces the image ("could not be read — run Z.AI: Setup Vision Bridge") so the model knows an image exists. The chat request itself never breaks.
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `zai.visionBridge.enabled` | `boolean` | `false` | Master switch for the text-only-model bridge (also flipped by `Z.AI: Toggle Vision Bridge`). Native vision models don't need it. |
+| `zai.visionBridge.bin` | `string` | `modlens` | modlens executable — bare command, absolute path, or command with leading args. Needs Node ≥ 22.19 on PATH. |
+| `zai.visionBridge.npxBypass` | `boolean` | `true` | Auto-fetch modlens via npx when the binary is missing, then auto-provision an engine. |
+| `zai.visionBridge.autoReuse` | `string[]` | `["opencode","codex"]` | Agent CLIs the bridge may auto-grant to reuse their vision model (zero-API-key path). Paid subs (`claude`/`pi`/`grok`) are opt-in for consent. |
+| `zai.visionBridge.provider` | `string` | `""` | Pin one engine (`gemini-api`, `openai`, `anthropic`, `antigravity-cli`, `claude-cli`, `kimi-cli`). Empty = modlens failover chain. |
+| `zai.visionBridge.timeoutMs` | `number` | `120000` | Per-image read timeout. First reads take 5–10s on API engines, 15–45s on agent CLIs; cached reads are instant. |
+| `zai.visionBridge.maxEvidenceChars` | `number` | `16000` | Hard cap for one image's evidence block injected into the conversation. |
+| `zai.visionBridge.announce` | `boolean` | `true` | Emit the short "👁 Reading N attached image(s)…" note while the bridge runs. |
+| `zai.visionBridge.promptTemplate` | `string` | `""` | Optional focus prompt forwarded to the engine for every image (e.g. "focus on UI text and error messages"). |
+| `zai.visionBridge.cacheTtlHours` | `number` | `24` | Persistent evidence cache TTL. `0` = never expire. Caching keeps follow-up turns from re-reading (and re-billing) images already sent. |
+
+> **📚 Architecture & evaluation**: [`doc/modlens-vision-bridge-evaluation.md`](./doc/modlens-vision-bridge-evaluation.md). Toggle command details: [`doc/vision-bridge-toggle.md`](./doc/vision-bridge-toggle.md).
+
+---
+
+## �🔬 Deep Research
 
 The extension registers Z.AI's remote **MCP servers** for Web Search and Web Reader and exposes them to Copilot Agent. The `@z-research` participant then runs them across several iterations to produce a multi‑source, cited research report. The result goes well past the two or three links the built‑in Copilot web search returns.
 
@@ -238,6 +277,9 @@ For advanced usage, you can also run these commands via the Command Palette (`Cm
 | `Z.AI: Set Reasoning Effort` | QuickPick the thinking depth (`off`–`max`) with cost hints — applies to the next request, no reload needed |
 | `Z.AI: Toggle Quota View` | Switch the status bar between 5-hour and weekly display |
 | `Z.AI: Diagnostics` | Show a markdown report of all registered Z.AI models |
+| `Z.AI: Setup Vision Bridge` | Probe modlens (via npx if not installed), check/engine setup, enable the bridge |
+| `Z.AI: Toggle Vision Bridge` | One-command on/off switch for image reading — off takes effect on the next request, no reload needed |
+| `Z.AI: Vision Bridge Status` | Engine readiness + evidence cache stats (memory + persistent tier) |
 
 > **Note:** Z.AI is registered both declaratively (in `package.json`, so VS Code knows the `zai` vendor id) and programmatically (so the extension can supply the live model list). You do **not** need to use the `Language Models` (gear icon ⚙) view — the `Z.AI: Set API Key` command is the only onboarding step.
 
@@ -274,6 +316,7 @@ The quota is fetched from `https://api.z.ai/api/monitor/usage/quota/limit` and a
 | `zai.showQuotaStatusBar` | `boolean` | `true` | Show the Z.AI Coding Plan quota (5-hour / weekly) in the VS Code status bar. Hover for a graphical SVG donut chart; click to toggle between windows. |
 | `zai.quotaRefreshInterval` | `number` | `5` | How often (in minutes) to refresh the Z.AI Coding Plan quota. `0` disables automatic refresh. |
 | `zai.experimentalContextIndicator` | `boolean` | `false` | Experimental: attempt to fill the Copilot Chat context indicator with real Z.AI token usage. Depends on VS Code internals. |
+| `zai.visionBridge.*` | various | — | Vision bridge settings (`enabled`, `bin`, `npxBypass`, `autoReuse`, `provider`, `timeoutMs`, `maxEvidenceChars`, `announce`, `promptTemplate`, `cacheTtlHours`) — full table in [Vision & Images](#-vision--images). |
 | `zai.research.maxSources` | `number` | `100` | Max sources fetched during a `@z-research` run when deep mode is triggered. Lower to reduce cost/latency. |
 | `zai.research.maxIterations` | `number` | `5` | Max query-expansion iterations before synthesis (`1`–`10`). |
 | `zai.research.concurrency` | `number` | `3` | Parallel MCP calls during search + read phases. Higher is faster but may hit the Z.AI MCP rate limit (~3-5 req/s safe). |

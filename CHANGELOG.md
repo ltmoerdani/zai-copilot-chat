@@ -2,6 +2,14 @@
 
 All notable changes to the **Z.AI Copilot Chat** extension are documented here.
 
+## 0.6.2 — 2026-09-12
+
+### Added
+
+- **Native image pass-through for vision models** — attached/pasted images on `glm-5.3-flash`, `glm-5v-turbo`, `glm-4.6v`, and `glm-4.6v-flash` are now forwarded to the multimodal endpoint as-is instead of being silently stripped. Previously these models advertised image input but the pixels never reached the API (the blanket `content.type: text` strip applied to every model, a leftover from the glm-4.6v era), so the model would honestly answer "I don't see any image". Vision-bridge evidence conversion is skipped for these models — no modlens, no latency. Safety net: if the endpoint ever rejects inline images, the request automatically retries once without them and points to the vision bridge. Log line `images=inline(image_url)` confirms a native image send.
+
+- **`Z.AI: Toggle Vision Bridge` command** — one-command on/off switch for image reading. Toggle OFF: attached images are no longer read by modlens — the "👁 Reading N attached image(s)…" pre-pass and its 5–45 s latency disappear, effective on the next request with no reload. Toggle ON: image input is advertised to all GLM models again (with a one-click Reload Window so the picker refreshes capabilities). Flips `zai.visionBridge.enabled` (Global); engine config and the evidence cache survive the cycle. Native vision models are unaffected by this toggle. Feature doc: [`doc/vision-bridge-toggle.md`](./doc/vision-bridge-toggle.md).
+
 ## 0.6.1 — 2026-08-28
 
 ### Added
