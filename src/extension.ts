@@ -30,6 +30,7 @@ import {
   isVisionBridgeEnabled,
   runVisionSetup,
   runVisionStatus,
+  toggleVisionBridge,
 } from "./vision/visionBridge";
 import {
   collectConfiguredApiKeysFromInspect,
@@ -172,6 +173,18 @@ function isAlwaysThinkingModel(modelId: string): boolean {
   return modelId.startsWith("glm-5.3");
 }
 
+/**
+ * Models that accept image input natively on the coding endpoint — image_url
+ * parts are forwarded as-is (no modlens bridge needed). glm-5.3-flash is
+ * natively multimodal (Z.AI 0.6.1 release notes); the -v models share the
+ * multimodal API shape. If the endpoint ever rejects image_url for one of
+ * these, the request retries once with images stripped (see the safety net
+ * in provideLanguageModelResponse).
+ */
+function isNativeVisionModel(modelId: string): boolean {
+  return VISION_MODELS.has(modelId);
+}
+
 const BUNDLED_MODELS = [
   // Text models — 1M context
   "glm-5.3",
@@ -244,6 +257,9 @@ export function activate(context: vscode.ExtensionContext) {
       runVisionSetup(context, () => provider.refreshModels()),
     ),
     vscode.commands.registerCommand("zai.vision.status", () => runVisionStatus(context)),
+    vscode.commands.registerCommand("zai.vision.toggle", () =>
+      void toggleVisionBridge(() => provider.refreshModels()),
+    ),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration("zai.showUsageStatusBar")) {
         resetUsageStatusBar();
@@ -1113,33 +1129,42 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
     }
 
     // Vision bridge pre-pass (modlens): convert image DataParts to structured
-    // text evidence BEFORE convertMessage() strips them. The Z.AI coding
-    // endpoint only accepts content.type "text", so without this step pasted
-    // images are silently dropped. Never breaks the request on failure.
+    // text evidence BEFORE convertMessage() strips them. Native vision models
+    // (glm-5.3-flash, -v models) skip the bridge — their image_url parts are
+    // forwarded as-is by convertMessage(includeImages=true). Never breaks the
+    // request on failure.
+    const nativeVision = isNativeVisionModel(model.id);
     let effectiveMessages: readonly vscode.LanguageModelChatRequestMessage[] = messages;
-    if (isVisionBridgeEnabled()) {
+    if (!nativeVision && isVisionBridgeEnabled()) {
       const bridge = getVisionBridge(this.context);
       effectiveMessages = await bridge.processMessages(messages, token, progress);
     }
 
-    const apiMessages = normalizeMessages(effectiveMessages.flatMap((message) => convertMessage(message, this.reasoningContentByToolCallId)));
+    const buildApiMessages = (includeImages: boolean) =>
+      normalizeMessages(
+        effectiveMessages.flatMap((message) =>
+          convertMessage(message, this.reasoningContentByToolCallId, includeImages),
+        ),
+      );
+    let apiMessages = buildApiMessages(nativeVision);
+    const sentNativeImages = nativeVision && apiMessages.some((m) => Array.isArray(m.content) && m.content.some((p) => p.type === "image_url"));
     const settings = getSettings();
     const limits = modelLimits(model.id, settings);
     const localRequestId = crypto.randomUUID();
 
-    this.log(`Request: model=${model.id} messages=${apiMessages.length}`);
+    this.log(`Request: model=${model.id} messages=${apiMessages.length}${sentNativeImages ? " images=inline(image_url)" : ""}`);
     if (settings.debugReasoning) {
       this.log("Reasoning debug is enabled. Provider reasoning_content will be written to this output channel when available.");
     }
 
+    const outputChannel = this.getOutputChannel();
+
+    // Estimate the output buffer for context window tracking
+    const estimatedInputTokens = estimateTotalTokens(apiMessages);
+    const maxAvailableOutput = Math.max(1024, limits.contextWindow - estimatedInputTokens);
+    const contextWindowOutputBuffer = Math.min(limits.maxOutputTokens, maxAvailableOutput);
+
     try {
-      const outputChannel = this.getOutputChannel();
-
-      // Estimate the output buffer for context window tracking
-      const estimatedInputTokens = estimateTotalTokens(apiMessages);
-      const maxAvailableOutput = Math.max(1024, limits.contextWindow - estimatedInputTokens);
-      const contextWindowOutputBuffer = Math.min(limits.maxOutputTokens, maxAvailableOutput);
-
       await streamChatCompletions(
         CHAT_COMPLETIONS_URL,
         apiKey,
@@ -1174,7 +1199,75 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
       );
       this.log(`Request completed: model=${model.id}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      let message = error instanceof Error ? error.message : String(error);
+
+      // Safety net for native vision pass-through: if the coding endpoint
+      // rejects image_url for this model (shape may change per release),
+      // retry ONCE with images stripped so the turn still gets a text answer
+      // instead of a hard failure. The notice tells the user what happened.
+      if (
+        sentNativeImages &&
+        /content\.type is invalid|allowed values.*['"]text['"]/i.test(message)
+      ) {
+        this.log(
+          `Native image_url rejected by the endpoint for ${model.id} — retrying once with images stripped (vision bridge is the fallback for this model).`,
+        );
+        apiMessages = buildApiMessages(false);
+        try {
+          await streamChatCompletions(
+            CHAT_COMPLETIONS_URL,
+            apiKey,
+            model.id,
+            apiMessages,
+            options,
+            settings,
+            limits,
+            progress,
+            token,
+            outputChannel,
+            (toolCallIds, reasoningContent) => {
+              for (const toolCallId of toolCallIds) {
+                this.reasoningContentByToolCallId.set(toolCallId, reasoningContent);
+              }
+            },
+            localRequestId,
+            contextWindowOutputBuffer,
+            (summary) => {
+              updateUsageStatusBar("Z.AI", model.id, summary);
+              const usageLog = formatUsageLogLine({
+                promptTokens: summary.promptTokens,
+                completionTokens: summary.completionTokens,
+                totalTokens: summary.totalTokens,
+                cachedTokens: summary.cachedTokens,
+                finishReason: summary.finishReason,
+              });
+              if (usageLog) {
+                outputChannel.appendLine(`[usage] ${usageLog}`);
+              }
+            },
+          );
+          this.log(`Request completed (images stripped retry): model=${model.id}`);
+          void vscode.window.showWarningMessage(
+            `Z.AI: ${model.id} rejected inline images — the request was retried without them. Enable the vision bridge (Z.AI: Setup Vision Bridge) for image support on this model.`,
+          );
+          return;
+        } catch (retryError) {
+          const retryMessage = retryError instanceof Error ? retryError.message : String(retryError);
+          message = retryMessage;
+          this.log(`Images-stripped retry also failed: ${retryMessage}`);
+          // fall through to the normal error reporting below with the retry error
+          const isTimeoutRetry = retryMessage.includes("timed out") || retryMessage.includes("Timeout") || retryMessage.includes("inactive");
+          const isFlagshipRetry = (MODEL_LIMITS[model.id]?.contextWindow ?? 0) >= 200000;
+          const friendlyRetryMsg = isTimeoutRetry
+            ? `Z.AI request to ${model.id} timed out. ${isFlagshipRetry ? `glm-5.3 / glm-5.2 / glm-5.1 / glm-5 / glm-4.7 are large-context flagship models (200K–1M) and need longer timeouts (default 3 min, inactivity 90-180s).` : ``} Try: (1) retry, (2) increase \`zai.requestTimeout\`, (3) clear chat history. Detail: ${retryMessage}`
+            : `Z.AI request failed: ${retryMessage}`;
+          this.log(`ERROR model=${model.id}: ${retryMessage}`);
+          this.getOutputChannel().show(true);
+          vscode.window.showErrorMessage(friendlyRetryMsg);
+          throw retryError;
+        }
+      }
+
       const isTimeout = message.includes("timed out") || message.includes("Timeout") || message.includes("inactive");
       const isFlagship = (MODEL_LIMITS[model.id]?.contextWindow ?? 0) >= 200000;
       const friendlyMsg = isTimeout
@@ -1714,7 +1807,8 @@ function uint8ArrayToBase64(data: Uint8Array): string {
 
 function convertMessage(
   message: vscode.LanguageModelChatRequestMessage,
-  reasoningContentByToolCallId: ReadonlyMap<string, string>
+  reasoningContentByToolCallId: ReadonlyMap<string, string>,
+  includeImages = false
 ): ApiMessage[] {
   const role = message.role === vscode.LanguageModelChatMessageRole.Assistant ? "assistant" : "user";
   const textParts: string[] = [];
@@ -1764,16 +1858,26 @@ function convertMessage(
     }
   }
 
-  // If there are images, build content as an array (OpenAI vision format)
-  // NOTE: Z.AI only accepts type:"text" — strip image_url parts to avoid
-  // "messages.content.type is invalid, allowed values: ['text']" errors.
+  // If there are images, build content as an array (OpenAI vision format).
+  // Native vision models (glm-5.3-flash, glm-5v-turbo, glm-4.6v*) are expected
+  // to accept image_url parts — they are multimodal per Z.AI release notes,
+  // and the old blanket strip made their advertised imageInput capability
+  // misleading (pixels never reached the API). For all other models the parts
+  // are stripped: the coding endpoint rejects image_url with "messages.content
+  // .type is invalid, allowed values: ['text']" (text-only models must go
+  // through the vision bridge instead). A safety-net retry in
+  // provideLanguageModelResponse strips images if the endpoint rejects them.
   if (imageParts.length > 0) {
     const content: ApiContentPart[] = [];
     if (textParts.length > 0) {
       content.push({ type: "text", text: textParts.join("\n") });
     }
-    // imageParts intentionally omitted — Z.AI API rejects image_url content type.
-    // If images were the only content, fall through to use the text-only path below.
+    if (includeImages) {
+      content.push(...imageParts);
+    }
+    // When !includeImages, imageParts are intentionally omitted — the Z.AI API
+    // rejects image_url content type for text-only models. If images were the
+    // only content, fall through to use the text-only path below.
 
     // Only use array content if we actually have multiple text parts;
     // otherwise use plain string for maximum API compatibility.

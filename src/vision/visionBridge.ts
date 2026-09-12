@@ -859,6 +859,41 @@ export class VisionBridge {
 // Commands (Phase 1 minimal implementations; richer UX lands in Phase 2)
 // ---------------------------------------------------------------------------
 
+/**
+ * 'Z.AI: Toggle Vision Bridge' — flips `zai.visionBridge.enabled` (Global).
+ * Off: attached images are no longer read by modlens (no "👁 Reading N
+ * attached image(s)…" pre-pass). On: image input is advertised again.
+ * Models are refreshed so the picker's image-input capability follows.
+ */
+export async function toggleVisionBridge(
+  notifyModelsChanged: () => void,
+): Promise<void> {
+  const config = vscode.workspace.getConfiguration("zai");
+  const currentlyEnabled = getVisionBridgeSettings().enabled;
+  const nextEnabled = !currentlyEnabled;
+
+  await config.update(
+    "visionBridge.enabled",
+    nextEnabled,
+    vscode.ConfigurationTarget.Global,
+  );
+  notifyModelsChanged();
+
+  if (nextEnabled) {
+    const reload = await vscode.window.showInformationMessage(
+      "Z.AI: Vision bridge ENABLED — attached images will be read by modlens. Reload the window so the model picker refreshes image-input capabilities.",
+      "Reload Window",
+    );
+    if (reload === "Reload Window") {
+      void vscode.commands.executeCommand("workbench.action.reloadWindow");
+    }
+  } else {
+    void vscode.window.showInformationMessage(
+      "Z.AI: Vision bridge DISABLED — attached images are no longer read (no more '👁 Reading N attached image(s)…'). Takes effect on the next request.",
+    );
+  }
+}
+
 export async function runVisionSetup(
   context: vscode.ExtensionContext,
   notifyModelsChanged: () => void,
