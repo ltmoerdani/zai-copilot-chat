@@ -6,6 +6,10 @@
       "ES2022",
       "DOM"
     ],
+    "types": [
+      "node",
+      "vscode"
+    ],
     "outDir": "out",
     "rootDir": "src",
     "sourceMap": true,

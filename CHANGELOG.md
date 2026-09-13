@@ -2,9 +2,17 @@
 
 All notable changes to the **Z.AI Copilot Chat** extension are documented here.
 
-## 0.6.3 — 2026-09-13
+## 0.6.3 — 2026-09-14
 
 ### Fixed
+
+- **CRITICAL: every action in the Z.AI Language Models group was inert** — **Open in Language Models (JSON)**, **Rename Group**, **Update API Key**, and **Delete** all did nothing when clicked. VS Code synthesizes a group for any vendor that has models but no stored group, naming it after the vendor's `displayName` (`addVendorModels`: `group: n.group ?? { vendor: e.vendor, name: e.displayName }`). The gear menu is built from that **synthesized** name (`"Z.AI"`), but every handler looks the group up in the **real** `chatLanguageModels.json` (`find(a => a.vendor === o && a.name === e)`) — where no `zai` entry existed. The lookup returned `undefined`, the handler threw `Language model provider group Z.AI for vendor zai not found.`, and the surrounding `catch (a) { if (Li(a)) return; throw a }` swallowed it (it only matches cancellation). Result: a fully populated menu where every item silently did nothing. **Fix:** `ZaiProvider.ensureLanguageModelsGroup()` now writes a real `zai` group into `chatLanguageModels.json` (key mirrored into VS Code's secret storage as a `${input:chat.lm.secret.*}` placeholder, 4-space indent preserved, idempotent, tolerant of a missing/malformed file). It runs from `Z.AI: Set / Update API Key` and, for users who already have a key, automatically on activation. Full write-up: [`doc/vscode-language-models-byok.md`](./doc/vscode-language-models-byok.md).
+
+- **Z.AI could not be updated or removed in Language Models** — the API key lived only in `SecretStorage`, so VS Code never wrote a `zai` entry to `chatLanguageModels.json` and therefore had no configuration group to manage. VS Code builds a group's gear-menu actions only when the group carries a stored `configuration` (`if (!configuration) return []` in `workbench.desktop.main.js`), and resolves models in two passes — groupless, then one call per configured group. A `SecretStorage`-only key only ever satisfies the groupless pass. Evidence: every other BYOK vendor in the reporting profile (MiMo, Cline, OpenCode Go/Zen, ZenMux) had a `chatLanguageModels.json` entry; `zai` did not.
+
+- **Every Z.AI model was listed twice once a BYOK group existed** — `provideLanguageModelChatInformation` served the full model list on both the groupless call and each per-group call. Group calls that carry a `configuration` but no `apiKey` (per-model settings such as `reasoningEffort`) now return `[]`, and the groupless call is suppressed once a BYOK group has been observed.
+
+- **Model family was unique per model** — `family: \`zai-${modelId}\`` gave every model its own family, which breaks VS Code's family-based grouping/selection and produced an ungroupable entry per model. All models now share the stable family `"glm"`.
 
 - **CRITICAL: 429 rate limits were never retried** — the retryability guard `isNonRetryableHttpError` used the regex `/\(4[0-8]\d\)/`, whose character class applies to the *second* digit, so `429` (4, 2∈[0-8], 9) **matched** and every rate-limit response (`429` / Z.AI error `1302` "Rate limit reached for requests") threw immediately on the first attempt. The entire backoff/retry path was dead code for 429; the ~1.5s re-attempts users saw were VS Code's own outer provider retries. Now `429` is explicitly retryable before the 4xx regex runs. Verified live: `Retry 1/4 in 3008ms (rate limit)` → `4/4 in 15483ms` chains now execute and recover. Full forensic write-up: [`doc/error-1261-429-fix.md`](./doc/error-1261-429-fix.md).
 
@@ -19,6 +27,14 @@ All notable changes to the **Z.AI Copilot Chat** extension are documented here.
 - **Z.AI error 1261 handler ("Prompt exceeds max length")** — when the server-side prompt limit is exceeded, the extension retries once with historical `reasoning_content` stripped (the largest safely-removable overhead), and on failure surfaces an actionable message (start a new chat / clear history / lower `zai.maxInputTokens`) instead of a raw 400 dump.
 
 ### Changed
+
+- **`Z.AI: Set API Key` → `Z.AI: Set / Update API Key`** — prompts for a key, stores it in `SecretStorage`, creates the `zai` group in `chatLanguageModels.json`, and refreshes models. `Manage Provider` now offers **Set / Update API Key (stored by this extension)**, **Open Language Models (BYOK)…**, **Clear Legacy API Key (SecretStorage)**, Test Connection, Refresh Models, and Show Quota.
+
+- **`zai` vendor declares `managementCommand: zai.manage`** — gives VS Code a working fallback action for the vendor.
+
+- **`chatLanguageModels.json` path now derives from `context.globalStorageUri`** — replaces hand-rolled `process.env` / `process.platform` probing, which missed portable installs and custom `--user-data-dir` and produced `Cannot find name 'process'` diagnostics in editors whose TypeScript service did not auto-include `@types/node`. File I/O uses `TextEncoder` / `TextDecoder` instead of `Buffer`. `tsconfig.json` now declares `"types": ["node", "vscode"]` so Node globals resolve consistently in the editor and on the command line.
+
+- **`SecretStorage` is retained as an internal mirror** so agent-host variants, cold-start requests, and `@z-research` can still resolve the key. `Test Connection`, `Show Quota`, the activation toast, the `@z-research` pre-flight, and the output-channel log now all point at a working key-entry path when no key is configured.
 
 - **Token estimator recalibrated** — `estimateTokenCount` no longer collapses internal whitespace (tokenizers count indentation in code/JSON tool results; collapsing under-counted 20–30%) and uses `chars ÷ 3.5` (was `÷ 4`). Calibrated against real server telemetry: `÷3` + 1.15× multiplier over-counted 1.59× (est 106K vs real `promptTokens` 66.7K); `÷3.5` without the multiplier lands ≈1.4× high — safely conservative without triggering premature compaction.
 

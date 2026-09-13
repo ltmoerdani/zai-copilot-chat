@@ -37,7 +37,7 @@ export interface WebReadInput {
 
 /** Error thrown when the Z.AI API key is missing or invalid. */
 export class MissingApiKeyError extends Error {
-  constructor(message = "Z.AI API key not configured. Use 'Z.AI: Set API Key' first.") {
+  constructor(message = 'Z.AI API key not configured. Add Z.AI via Language Models ("+ Add Models…") first.') {
     super(message);
     this.name = "MissingApiKeyError";
   }

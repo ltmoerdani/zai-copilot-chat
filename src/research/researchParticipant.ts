@@ -97,7 +97,7 @@ export function registerResearchParticipant(deps: ParticipantDeps): vscode.ChatP
       if (!(await mcpTools.isReady())) {
         stream.markdown(
           "⚠️ **Z.AI API key is not set.**\n\n" +
-            "Run **Z.AI: Set API Key** from the Command Palette to configure your key, " +
+            'Add Z.AI through **Language Models** ("+ Add Models…" → Z.AI) to configure your key, ' +
             "then re-run `@z-research`.",
         );
         return;
@@ -218,7 +218,7 @@ function renderError(stream: vscode.ChatResponseStream, error: unknown): void {
 
 function errorMessage(error: unknown): string {
   if (error instanceof MissingApiKeyError) {
-    return "Z.AI API key not set. Run 'Z.AI: Set API Key' in the Command Palette, then retry.";
+    return 'Z.AI API key not set. Add Z.AI via Language Models ("+ Add Models…"), then retry.';
   }
   if (error instanceof ZaiApiError) {
     return `Z.AI error (HTTP ${error.status}): ${error.message}`;
