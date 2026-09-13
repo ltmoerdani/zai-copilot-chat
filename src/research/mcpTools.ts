@@ -70,7 +70,7 @@ export class McpToolInvoker {
     const key = await this.options.secrets.get(SECRET_KEY);
     if (!key) {
       throw new Error(
-        "Z.AI API key is required. Use 'Z.AI: Set API Key' first.",
+        'Z.AI API key is required. Add Z.AI via Language Models ("+ Add Models…") first.',
       );
     }
     return key;

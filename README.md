@@ -43,7 +43,7 @@ You already love Copilot Chat. Now imagine it powered by Z.AI's GLM models — a
 | 💭 **Reasoning control** | Pick thinking depth per task via `zai.reasoningEffort` — `off` / `low` / `medium` / `high` / `max`, translated per GLM generation |
 | 👁️ **Vision** | GLM-5.3-Flash, GLM-5V-Turbo, GLM-4.6V, GLM-4.6V-Flash read screenshots and diagrams |
 | 🆓 **Free models** | `glm-4.5-flash` (text) and `glm-4.6v-flash` (vision) are $0 on Z.AI |
-| 🔒 **Key storage** | Your API key is stored in VS Code SecretStorage, never sent anywhere but Z.AI |
+| 🔒 **Key storage** | Your API key is stored by VS Code (SecretStorage + `chatLanguageModels.json`), never sent anywhere but Z.AI |
 | 🔓 **Open source** | MIT, readable code, contributions welcome |
 
 ---
@@ -221,7 +221,7 @@ Examples:
 
 The only prerequisite:
 
-1. Open the Command Palette and run **Z.AI: Set API Key** (if you haven't already).
+1. Open the Command Palette and run **Z.AI: Set / Update API Key** (if you haven't already).
 2. Type `@z-research <topic>` in Copilot Chat.
 
 The participant will display a clear error if the API key is not set.
@@ -257,22 +257,22 @@ Five minutes from zero to your first GLM reply.
 
 > **💡 Tips:**
 > - Registered models show up automatically in the Copilot Chat model picker.
-> - Run `Z.AI: Set API Key` from the Command Palette to store your API key. Without it the picker will not list any Z.AI models.
-> - SecretStorage is per-device and is **not** synced by VS Code Settings Sync, so on a new machine you must re-enter the key even if everything else synced.
+> - Configure the key with **`Z.AI: Set / Update API Key`** (Command Palette). This is the recommended path — it also creates the `zai` group in `chatLanguageModels.json` so VS Code's own **Update API Key** / **Delete** actions work.
+> - The key is per-device and is **not** synced by VS Code Settings Sync, so on a new machine you must re-enter it even if everything else synced.
 > - If the picker still does not show Z.AI after setting the key, open the `Z.AI` output channel and look for the activation diagnostics block, then run `Developer: Reload Window`. See [doc/vscode-128-byok-utility-model.md §10](./doc/vscode-128-byok-utility-model.md).
 
 ---
 
 ## Commands
 
-Once installed, Z.AI models appear directly in the **GitHub Copilot Chat model picker** with no extra commands. Configure your API key by running **`Z.AI: Set API Key`** from the Command Palette (`Cmd+Shift+P` / `Ctrl+Shift+P`).
+Once installed, Z.AI models appear directly in the **GitHub Copilot Chat model picker**. Configure your API key by running **`Z.AI: Set / Update API Key`** from the Command Palette (`Cmd+Shift+P` / `Ctrl+Shift+P`).
 
 For advanced usage, you can also run these commands via the Command Palette (`Cmd+Shift+P` / `Ctrl+Shift+P`):
 
 | Command | Description |
 |---|---|
-| `Z.AI: Manage Provider` | Manage API key, refresh models, or test connection |
-| `Z.AI: Set API Key` | Store or update your Z.AI API key (stored in VS Code SecretStorage, per-device) |
+| `Z.AI: Manage Provider` | Set/update the API key, open Language Models, refresh models, or test connection |
+| `Z.AI: Set / Update API Key` | Prompt for a Z.AI API key, store it, and create the `zai` group in `chatLanguageModels.json` (per-device) |
 | `Z.AI: Show Quota` | Open a detailed markdown report of all quota windows |
 | `Z.AI: Set Reasoning Effort` | QuickPick the thinking depth (`off`–`max`) with cost hints — applies to the next request, no reload needed |
 | `Z.AI: Toggle Quota View` | Switch the status bar between 5-hour and weekly display |
@@ -281,7 +281,7 @@ For advanced usage, you can also run these commands via the Command Palette (`Cm
 | `Z.AI: Toggle Vision Bridge` | One-command on/off switch for image reading — off takes effect on the next request, no reload needed |
 | `Z.AI: Vision Bridge Status` | Engine readiness + evidence cache stats (memory + persistent tier) |
 
-> **Note:** Z.AI is registered both declaratively (in `package.json`, so VS Code knows the `zai` vendor id) and programmatically (so the extension can supply the live model list). You do **not** need to use the `Language Models` (gear icon ⚙) view — the `Z.AI: Set API Key` command is the only onboarding step.
+> **Note:** Z.AI is registered both declaratively (in `package.json`, so VS Code knows the `zai` vendor id and the API-key form fields) and programmatically (so the extension can supply the live model list). The `zai` vendor also declares `managementCommand: zai.manage`, which gives VS Code a working fallback action for the vendor. You do **not** need to visit the `Language Models` view manually — `Z.AI: Set / Update API Key` creates the group for you.
 
 ---
 
@@ -296,7 +296,7 @@ When your API key belongs to a Z.AI Coding Plan subscription, the extension show
 
 The quota is fetched from `https://api.z.ai/api/monitor/usage/quota/limit` and auto-refreshes every 5 minutes (configurable via `zai.quotaRefreshInterval`).
 
-> **If quota data is unavailable** (for example, no API key set, or the key doesn't belong to a Coding Plan), the status bar shows a persistent `$(graph) Z.AI quota` item with a tooltip linking to **Z.AI: Set API Key**.
+> **If quota data is unavailable** (for example, no API key set, or the key doesn't belong to a Coding Plan), the status bar shows a persistent `$(graph) Z.AI quota` item whose tooltip points at **`Z.AI: Set / Update API Key`**.
 
 ---
 
@@ -367,7 +367,7 @@ The Z.AI extension only sends the **official** `LanguageModelChatInformation` fi
 
 If the model picker doesn't show your Z.AI models or they can't be pinned:
 
-1. **Make sure your API key is set on this device.** SecretStorage is per-device and is **not** synced by VS Code Settings Sync. Run `Z.AI: Set API Key` from the Command Palette on every new machine, then run `Developer: Reload Window`. The activation diagnostics block in the `Z.AI` output channel will report how many models VS Code sees.
+1. **Make sure your API key is set on this device.** The key is per-device and is **not** synced by VS Code Settings Sync. Run **`Z.AI: Set / Update API Key`** from the Command Palette on every new machine, then run `Developer: Reload Window`. The activation diagnostics block in the `Z.AI` output channel will report how many models VS Code sees.
 2. **Pin a model as default.** Set `zai.defaultModel` in your user settings (e.g. `glm-5.3`). The extension marks that model as `isDefault: true` so VS Code highlights it in the picker and seeds new chat sessions with it.
 3. **Reload the window** after changing `zai.defaultModel` (the model list is cached per-window).
 4. **If the Extension Host log shows `Chat model provider uses UNKNOWN vendor zai`**, the declarative `languageModelChatProviders` contribution has been removed from `package.json` and must be restored. This is checked on every release.
@@ -380,7 +380,38 @@ If the picker still misbehaves:
 
 ### "The gear icon / 'Manage Models…' in the picker does nothing when clicked"
 
-This is **not** a bug in the Z.AI extension — it is enforced by VS Code. The `workbench.action.chat.manage` command (the gear icon in the Copilot Chat model picker) has the precondition:
+There are **three** distinct causes. Check them in this order.
+
+**Cause 1 — the Z.AI group is missing from `chatLanguageModels.json` (most common).**
+
+If the gear menu **opens** but **Open in Language Models (JSON)**, **Rename Group**, **Update API Key**, and **Delete** all do nothing when clicked, this is the cause.
+
+VS Code synthesizes a group for any vendor that has models but no stored group, naming it after the vendor's `displayName`:
+
+```js
+// addVendorModels()
+let r = { group: n.group ?? { vendor: e.vendor, name: e.displayName }, vendor: e };
+```
+
+The gear menu is built from that **synthesized** name (`"Z.AI"`), but every handler looks the group up in the **real** configuration file:
+
+```js
+getLanguageModelsProviderGroups().find(a => a.vendor === o && a.name === e)
+```
+
+With no `zai` entry, that `find()` returns `undefined`, the handler throws `Language model provider group Z.AI for vendor zai not found.`, and the surrounding `catch` swallows it — so the UI looks completely dead.
+
+**Fixed in 0.6.3:** the extension now writes a real `zai` group into `chatLanguageModels.json` automatically (on activation if a key is already stored, or when you run `Z.AI: Set / Update API Key`). If you are on an older version, run **`Z.AI: Set / Update API Key`** and reload. Full analysis: [doc/vscode-language-models-byok.md](./doc/vscode-language-models-byok.md).
+
+**Cause 2 — the Z.AI group has no stored configuration.**
+
+VS Code builds a group's gear-menu actions only when that group carries a stored `configuration` (an entry in `chatLanguageModels.json`). The workbench logic is literally `if (!configuration) return []`. A key that lives only in the extension's own storage produces a Z.AI model set with **no** group configuration, so the menu is **empty** (no items at all).
+
+Fix: run **`Z.AI: Set / Update API Key`**, then `Developer: Reload Window`. Verify by checking that `chatLanguageModels.json` now contains a `zai` entry.
+
+**Cause 3 — Copilot Chat is not signed in (precondition not met).**
+
+The `workbench.action.chat.manage` command has the precondition:
 
 ```
 chatIsEnabled AND (Copilot entitlement OR github.copilot.clientByokEnabled)
@@ -389,7 +420,7 @@ chatIsEnabled AND (Copilot entitlement OR github.copilot.clientByokEnabled)
 `chatIsEnabled` is set to `true` by the **GitHub Copilot Chat** extension only after the user signs in to GitHub. On a second device where Settings Sync did not carry the auth state (Settings Sync intentionally does not sync some auth state for security), the user can end up in a state where:
 
 - The Z.AI extension is installed and the API key is set.
-- `selectChatModels({ vendor: "zai" })` returns 13 models (verified in the `Z.AI` output channel).
+- `selectChatModels({ vendor: "zai" })` returns models (verified in the `Z.AI` output channel).
 - But clicking the gear icon does nothing — no popup, no error.
 
 The extension attempts to work around this on activation by setting the `github.copilot.clientByokEnabled` context key to `true`, which satisfies the OR-branch of the precondition. If the gear icon is still unresponsive after reload, the definitive fix is to **sign in to GitHub Copilot Chat** (a free personal GitHub account is enough — no Copilot Pro needed). The sign-in button is in the Copilot Chat sidebar.
@@ -400,7 +431,7 @@ See [doc/vscode-128-byok-utility-model.md §10](./doc/vscode-128-byok-utility-mo
 
 The `@z-research` participant calls the Z.AI MCP HTTP endpoints directly. It needs your Z.AI API key to authenticate.
 
-1. Run **Z.AI: Set API Key** from the Command Palette.
+1. Run **Z.AI: Set / Update API Key** from the Command Palette.
 2. Re-run `@z-research <topic>`.
 
 > **Note:** In v0.3.0, a `Z.AI: Setup MCP Servers` command was used to write `mcp.json`. This command was removed in v0.3.1: the extension now calls the Z.AI MCP endpoints directly via HTTP. If you have `zai-web-search-prime` or `zai-web-reader` entries in your `mcp.json`, you can safely remove them; they are no longer needed.

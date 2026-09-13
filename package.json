@@ -79,7 +79,7 @@
       },
       {
         "command": "zai.setApiKey",
-        "title": "Z.AI: Set API Key"
+        "title": "Z.AI: Set / Update API Key"
       },
       {
         "command": "zai.diagnostics",
@@ -324,6 +324,7 @@
       {
         "vendor": "zai",
         "displayName": "Z.AI",
+        "managementCommand": "zai.manage",
         "configuration": {
           "type": "object",
           "required": [

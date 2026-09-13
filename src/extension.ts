@@ -298,6 +298,14 @@ export function activate(context: vscode.ExtensionContext) {
 
   // VS Code 1.128 changed BYOK utility model defaults — show a one-time notice if not configured.
   checkUtilityModelConfiguration(context);
+
+  // Make VS Code's own Language Models actions (Update API Key / Rename /
+  // Delete) functional. Without a real `zai` group in chatLanguageModels.json,
+  // VS Code synthesizes a group named after the display name ("Z.AI") and
+  // builds the gear menu from it, but every handler looks the group up in the
+  // real file and throws — the error is swallowed, so all menu items appear
+  // dead. Deferred so activation is never blocked by filesystem work.
+  queueMicrotask(() => void provider.ensureLanguageModelsGroupForExistingKey());
 }
 
 /**
@@ -327,7 +335,7 @@ async function logActivationDiagnostics(
 
     const apiKey = await context.secrets.get(SECRET_KEY);
     lines.push(
-      `${ts} [activate] SecretStorage "${SECRET_KEY}": ${apiKey ? `present (len=${apiKey.length})` : "MISSING — run 'Z.AI: Set API Key' then reload"}`,
+      `${ts} [activate] SecretStorage "${SECRET_KEY}": ${apiKey ? `present (len=${apiKey.length})` : "MISSING — add Z.AI via Language Models ('+ Add Models…') then reload"}`,
     );
 
     // selectChatModels may return [] on the same tick activation runs because
@@ -394,12 +402,12 @@ async function logActivationDiagnostics(
     if (!apiKey) {
       void vscode.window
         .showWarningMessage(
-          "Z.AI: No API key set. Run 'Z.AI: Set API Key' from the Command Palette to make Z.AI models appear in Copilot Chat.",
-          "Set API Key",
+          "Z.AI: No API key set. Add Z.AI through Language Models ('+ Add Models…') so its models appear in Copilot Chat and stay manageable.",
+          "Open Language Models",
         )
         .then((choice) => {
-          if (choice === "Set API Key") {
-            void provider.setApiKey();
+          if (choice === "Open Language Models") {
+            void provider.openByokFlow();
           }
         });
     }
@@ -607,7 +615,7 @@ function resetQuotaStatusBar(): void {
   if (!text) {
     quotaStatusBarItem.text = "$(graph) Z.AI quota";
     quotaStatusBarItem.tooltip = new vscode.MarkdownString(
-      "Z.AI quota not available. Click to refresh.\n\nIf you have not set an API key yet, use 'Z.AI: Set API Key'.",
+      "Z.AI quota not available. Click to refresh.\n\nIf you have not set an API key yet, add Z.AI in Language Models ('+ Add Models…').",
       true,
     );
     quotaStatusBarItem.tooltip.supportHtml = true;
@@ -726,6 +734,8 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
   readonly onDidChangeLanguageModelChatInformation = this.changeEmitter.event;
   private readonly apiKeysByModelId = new Map<string, string>();
   private readonly reasoningContentByToolCallId = new Map<string, string>();
+  /** Tracks whether a BYOK group (from VS Code's Manage Language Models) has been observed. */
+  private hasByokGroupConfigured = false;
   private outputChannel: vscode.OutputChannel | undefined;
 
   constructor(
@@ -760,6 +770,11 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
     }
     const keep = 4;
     return `${trimmed.slice(0, keep)}…${trimmed.slice(-keep)}`;
+  }
+
+  /** Record that VS Code's BYOK configuration has provided a key. */
+  private async markByokGroupConfigured(): Promise<void> {
+    this.hasByokGroupConfigured = true;
   }
 
   private async clearConfiguredProviderApiKey(): Promise<string[]> {
@@ -819,17 +834,21 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
     const hasExistingKeys = hasAnyKnownApiKey({ secretApiKey: apiKey, cachedApiKeys, configuredApiKeys });
 
     if (!hasExistingKeys) {
-      await this.setApiKey();
+      // No key anywhere. Offer the extension-managed entry point first: it
+      // always works, whereas VS Code's own group actions silently no-op when
+      // the stored apiKey is a `${input:chat.lm.secret.*}` placeholder.
+      await this.promptAndStoreApiKey();
       return;
     }
 
     const choice = await vscode.window.showQuickPick(
       [
-        { label: "Set API Key", action: "set" as const },
-        { label: "Clear API Key", action: "clear" as const },
-        { label: "Test Connection", action: "test" as const },
-        { label: "Refresh Models", action: "refresh" as const },
-        { label: "Show Quota", action: "quota" as const }
+        { label: "$(key) Set / Update API Key (stored by this extension)", action: "setKey" as const },
+        { label: "$(gear) Open Language Models (BYOK)…", action: "configure" as const },
+        { label: "$(trash) Clear Legacy API Key (SecretStorage)", action: "clear" as const },
+        { label: "$(plug) Test Connection", action: "test" as const },
+        { label: "$(refresh) Refresh Models", action: "refresh" as const },
+        { label: "$(graph) Show Quota", action: "quota" as const }
       ],
       {
         title: "Manage Z.AI",
@@ -841,8 +860,13 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
       return;
     }
 
-    if (choice.action === "set") {
-      await this.setApiKey();
+    if (choice.action === "setKey") {
+      await this.promptAndStoreApiKey();
+      return;
+    }
+
+    if (choice.action === "configure") {
+      await this.openByokFlow();
       return;
     }
 
@@ -860,6 +884,7 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
       configuredKeys.forEach((key) => allKeys.add(key));
 
       await this.context.secrets.delete(SECRET_KEY);
+      this.hasByokGroupConfigured = false;
       this.changeEmitter.fire();
 
       const cleared = Array.from(allKeys).map((key) => this.maskApiKey(key));
@@ -887,7 +912,9 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
   async testConnection(): Promise<void> {
     const apiKey = await this.context.secrets.get(SECRET_KEY);
     if (!apiKey) {
-      vscode.window.showErrorMessage("Z.AI: No API key set. Use 'Set API Key' first.");
+      vscode.window.showErrorMessage(
+        'Z.AI: No API key configured. Add the provider via Language Models ("+ Add Models…" → Z.AI) first.',
+      );
       return;
     }
 
@@ -928,21 +955,185 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
     }
   }
 
+  /**
+   * Deprecated key-entry point, kept so the `zai.setApiKey` command id still
+   * resolves. Prefer {@link promptAndStoreApiKey} (extension-managed) or the
+   * native BYOK flow ({@link openByokFlow}).
+   */
   async setApiKey(): Promise<void> {
+    await this.promptAndStoreApiKey();
+  }
+
+  /**
+   * Ensure a REAL `zai` group exists in VS Code's `chatLanguageModels.json`.
+   *
+   * WHY THIS IS REQUIRED: VS Code's Language Models tree synthesizes a group
+   * for any vendor that has models but no stored group:
+   *
+   *   // addVendorModels()
+   *   let r = { group: n.group ?? { vendor: e.vendor, name: e.displayName }, vendor: e };
+   *
+   * The gear menu is then built from that SYNTHESIZED name (`"Z.AI"`), but
+   * every handler looks the group up in the real configuration file:
+   *
+   *   getLanguageModelsProviderGroups().find(a => a.vendor === o && a.name === e)
+   *
+   * With no `zai` entry in `chatLanguageModels.json`, that `find()` returns
+   * `undefined` and the handler throws
+   * `Language model provider group Z.AI for vendor zai not found.` — which the
+   * surrounding `catch` swallows, so the UI looks completely dead: every menu
+   * item (Open in Language Models (JSON), Rename Group, Update API Key,
+   * Delete) appears to do nothing when clicked.
+   *
+   * Writing a real group makes the names match, so all four actions work.
+   * The group stores the key as a `${input:chat.lm.secret.*}` placeholder,
+   * which is the format VS Code itself writes.
+   */
+  private async ensureLanguageModelsGroup(): Promise<void> {
+    try {
+      const groups = await this.readLanguageModelsGroups();
+      if (groups.some((g) => g.vendor === VENDOR)) {
+        return;
+      }
+
+      const apiKey = await this.context.secrets.get(SECRET_KEY);
+      if (!apiKey) {
+        return;
+      }
+
+      // Mirror the key into VS Code's own secret storage and reference it with
+      // the `${input:...}` placeholder VS Code uses for BYOK groups.
+      const secretName = `chat.lm.secret.zai-${Date.now().toString(16)}`;
+      await this.context.secrets.store(secretName, apiKey.trim());
+
+      groups.push({
+        name: "Z.AI",
+        vendor: VENDOR,
+        apiKey: `\${input:${secretName}}`,
+      });
+      await this.writeLanguageModelsGroups(groups);
+      this.log(
+        `Created the "Z.AI" group in chatLanguageModels.json so VS Code's Language Models actions (Update API Key / Delete) work.`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.log(`Could not create the Z.AI group in chatLanguageModels.json: ${message}`);
+    }
+  }
+
+  /**
+   * Public wrapper so activation can create the group for users who already
+   * have a key stored (see {@link ensureLanguageModelsGroup}).
+   */
+  async ensureLanguageModelsGroupForExistingKey(): Promise<void> {
+    await this.ensureLanguageModelsGroup();
+  }
+
+  /**
+   * Absolute path of VS Code's `chatLanguageModels.json`.
+   *
+   * Derived from `context.globalStorageUri`, which VS Code resolves to
+   * `<user-data-dir>/User/globalStorage/<extension-id>` on every platform
+   * (including portable installs and custom `--user-data-dir`). Walking up two
+   * levels yields `<user-data-dir>/User`, so no `process.env` / `process.platform`
+   * probing is needed — that probing was both platform-fragile and the source
+   * of the `Cannot find name 'process'` diagnostics.
+   */
+  private languageModelsConfigUri(): vscode.Uri {
+    const userDir = vscode.Uri.joinPath(this.context.globalStorageUri, "..", "..");
+    return vscode.Uri.joinPath(userDir, "chatLanguageModels.json");
+  }
+
+  /** Read `chatLanguageModels.json`, tolerating a missing or malformed file. */
+  private async readLanguageModelsGroups(): Promise<Array<Record<string, unknown>>> {
+    const uri = this.languageModelsConfigUri();
+    try {
+      const bytes = await vscode.workspace.fs.readFile(uri);
+      const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
+      return Array.isArray(parsed) ? (parsed as Array<Record<string, unknown>>) : [];
+    } catch {
+      // Missing file (VS Code creates it on first BYOK use) or invalid JSON.
+      return [];
+    }
+  }
+
+  /** Write `chatLanguageModels.json` back, preserving VS Code's 4-space indent. */
+  private async writeLanguageModelsGroups(
+    groups: Array<Record<string, unknown>>,
+  ): Promise<void> {
+    const uri = this.languageModelsConfigUri();
+    const content = JSON.stringify(groups, undefined, "    ");
+    await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(content));
+  }
+
+  /**
+   * Prompt for an API key and store it in SecretStorage, then refresh models.
+   *
+   * WHY THIS EXISTS: VS Code's own "Update API Key" / "Delete" actions for a
+   * provider group silently do nothing when the group's stored `apiKey` is a
+   * `${input:chat.lm.secret.*}` placeholder. VS Code's
+   * `updateLanguageModelsProviderGroupApiKey` resolves the group configuration
+   * through `_resolveConfiguration`, whose `decodeSecretKey` returns the
+   * *secret name* rather than the key value; the handler then compares the
+   * user's input against that name and bails out of the write path. The same
+   * placeholder makes `Delete` a no-op. This method gives users a key-entry
+   * path that does not depend on those handlers.
+   */
+  async promptAndStoreApiKey(): Promise<void> {
+    const existing = await this.context.secrets.get(SECRET_KEY);
     const apiKey = await vscode.window.showInputBox({
       title: "Z.AI API Key",
-      prompt: "Paste your Z.AI API key. It will be stored securely in VS Code SecretStorage.",
+      prompt: existing
+        ? "Enter a new Z.AI API key to replace the stored one."
+        : "Paste your Z.AI API key. It is stored in VS Code SecretStorage and only sent to Z.AI.",
       password: true,
-      ignoreFocusOut: true
+      ignoreFocusOut: true,
+      placeHolder: existing ? "•••••••• (a key is already stored)" : "sk-…",
     });
 
-    if (!apiKey) {
+    if (!apiKey || !apiKey.trim()) {
       return;
     }
 
     await this.context.secrets.store(SECRET_KEY, apiKey.trim());
+    // A fresh key must be served on the next groupless call, so drop the
+    // BYOK-group suppression flag set by a previous configuration group.
+    this.hasByokGroupConfigured = false;
+    // Make VS Code's own Language Models actions functional for this vendor.
+    await this.ensureLanguageModelsGroup();
     this.changeEmitter.fire();
-    vscode.window.showInformationMessage("Z.AI API key saved.");
+    vscode.window.showInformationMessage(
+      existing ? "Z.AI API key updated." : "Z.AI API key saved.",
+    );
+  }
+
+  /**
+   * Open VS Code's native Language Models (BYOK) flow so the user adds or
+   * updates the Z.AI key through VS Code itself.
+   *
+   * WHY THIS IS THE ONLY SUPPORTED PATH: VS Code builds a group's gear-menu
+   * actions only when that group carries a stored `configuration` (an entry in
+   * `chatLanguageModels.json`). A key that lives only in our SecretStorage
+   * produces a groupless/default model set — VS Code shows those models, but
+   * their gear menu is empty, so clicking the gear icon does nothing and there
+   * is no "Delete Group". Adding Z.AI via "+ Add Models…" writes the `zai`
+   * entry VS Code needs to offer Update API Key / Delete Group.
+   */
+  async openByokFlow(): Promise<void> {
+    this.log("Opening VS Code Language Models (BYOK) flow for Z.AI.");
+    try {
+      await vscode.commands.executeCommand("workbench.action.chat.manage");
+      void vscode.window.showInformationMessage(
+        'Z.AI: in Language Models, click "+ Add Models…" → Z.AI and paste your API key. ' +
+          "That creates the group VS Code needs for Update API Key and Delete Group.",
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.log(`Could not open the Language Models panel: ${message}`);
+      void vscode.window.showWarningMessage(
+        'Z.AI: open "Chat: Manage Language Models" manually, then choose "+ Add Models…" → Z.AI.',
+      );
+    }
   }
 
   async showDiagnostics(): Promise<void> {
@@ -992,10 +1183,10 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
     if (!apiKey) {
       const choice = await vscode.window.showWarningMessage(
         "Z.AI: No API key set. Configure an API key to view Coding Plan quota.",
-        "Set API Key",
+        "Open Language Models",
       );
-      if (choice === "Set API Key") {
-        await this.setApiKey();
+      if (choice === "Open Language Models") {
+        await this.openByokFlow();
       }
       return;
     }
@@ -1068,12 +1259,50 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
     options: vscode.PrepareLanguageModelChatModelOptions,
     token: vscode.CancellationToken
   ): Promise<ZaiModel[]> {
-    // Always prefer SecretStorage over provider configuration to avoid stale cached keys
-    const apiKey = await this.context.secrets.get(SECRET_KEY);
+    const opts = options as { configuration?: { apiKey?: string } };
+
+    // 1. Try BYOK configuration first (VS Code may supply the API key directly).
+    let apiKey = typeof opts?.configuration?.apiKey === "string" && opts.configuration.apiKey.trim()
+      ? opts.configuration.apiKey.trim()
+      : undefined;
+
+    // A call that carries a BYOK key is a configured-group call. Record that
+    // the vendor is configured natively, so the groupless call stays silent
+    // (issue #106 — without this, models appear twice).
+    if (apiKey) {
+      await this.markByokGroupConfigured();
+    } else if (opts?.configuration !== undefined) {
+      // A group call with a non-undefined configuration that carries no API
+      // key is a per-model configuration group (only `settings`, no key —
+      // e.g. a `reasoningEffort` picked in the model picker). VS Code
+      // resolves its configuration to `{}` here. The groupless call already
+      // served the models via SecretStorage, so serving them again would
+      // duplicate every model. The per-model settings still apply at request
+      // time via `modelConfiguration`.
+      return [];
+    }
+
+    // 2. Fall back to the extension's own secret storage when BYOK did not
+    //    provide a usable key.
+    if (!apiKey) {
+      if (this.hasByokGroupConfigured) {
+        return [];
+      }
+      apiKey = await this.context.secrets.get(SECRET_KEY);
+    }
+
+    // 3. Persist BYOK key to SecretStorage so it survives restarts and
+    //    agent-variant providers can inherit it.
+    if (apiKey) {
+      const existing = await this.context.secrets.get(SECRET_KEY);
+      if (existing !== apiKey) {
+        await this.context.secrets.store(SECRET_KEY, apiKey);
+      }
+    }
 
     if (!apiKey) {
       this.log(
-        "provideLanguageModelChatInformation: no API key in SecretStorage — returning [] (Z.AI will NOT appear in the picker). Run 'Z.AI: Set API Key'.",
+        "provideLanguageModelChatInformation: no API key — returning [] (Z.AI will NOT appear in the picker). Add Z.AI via Language Models ('+ Add Models…').",
       );
       return [];
     }
@@ -1096,7 +1325,10 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
       return {
         id: modelId,
         name: `Z.AI / ${formatModelName(modelId)}`,
-        family: `zai-${modelId}`,
+        // A stable real family name ("glm") so VS Code's family-based model
+        // selection/grouping works — a per-model unique string previously
+        // broke `modelFamily` routing and sticky grouping.
+        family: "glm",
         version: "1.0.0",
         detail: "Z.AI",
         tooltip: `Z.AI model: ${modelId}`,
