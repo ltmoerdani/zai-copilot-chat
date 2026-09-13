@@ -104,7 +104,7 @@ You pick a Z.AI GLM model from the Copilot Chat model picker the same way you wo
 - **Vision bridge (beta).** Text-only GLM models can "see" images: the modlens CLI converts attached/pasted images into structured text evidence before each request. Run **`Z.AI: Setup Vision Bridge`** once, then turn it on or off anytime with **`Z.AI: Toggle Vision Bridge`** — no reload needed to disable. Native vision models (glm-5.3-flash, -v models) receive images inline with no setup. See [Vision & Images](#-vision--images) below.
 - **Deep research agent.** The `@z-research` chat participant runs Z.AI's MCP Web Search and Web Reader across several iterations to produce a cited research report. See [Deep Research](#-deep-research) below.
 - **Progress you can actually see.** Each completed search query is pushed to the chat as a progress update, not one big batch at the end.
-- **Built to survive Z.AI's quirks.** The extension handles double‑encoded JSON responses, retries on rate‑limit (429) with exponential backoff, and enforces a per‑call timeout so a single hung MCP call can't freeze your run.
+- **Built to survive Z.AI's quirks.** The extension handles double‑encoded JSON responses, retries on rate‑limit (429) with rate‑limit‑aware exponential backoff (3s → 15s, up to 5 attempts), catches server overload (1305) with a longer cadence (4s → 20s, up to 6 attempts, ~90s), spaces request starts ≥750ms apart to defuse VS Code's parallel‑request bursts, recovers from prompt‑length errors (1261) by retrying without historical reasoning, and enforces a per‑call timeout so a single hung MCP call can't freeze your run.
 - **Junk URL filter.** Instagram, TikTok, YouTube, asset CDNs, and "how to host" guides are dropped at the candidate stage. That alone saves a 30s timeout per junk URL.
 
 ---
@@ -306,11 +306,11 @@ The quota is fetched from `https://api.z.ai/api/monitor/usage/quota/limit` and a
 |---|---|---|---|
 | `zai.temperature` | `number` | `0.2` | Sampling temperature for chat completions (`0`–`2`) |
 | `zai.maxTokens` | `number` | `0` | Max output token override. `0` uses the per-model bundled maximum. |
-| `zai.maxInputTokens` | `number` | `0` | Context window override. `0` uses the per-model bundled context size. |
+| `zai.maxInputTokens` | `number` | `0` | Context window override. `0` uses the per-model bundled context size. 128K-tier models advertise 75% of the window (96K) so VS Code compacts before the server-side prompt limit (Z.AI error 1261) is hit. |
 | `zai.debugReasoning` | `boolean` | `false` | Write provider `reasoning_content` to **Output → Z.AI** for debugging |
 | `zai.requestTimeout` | `number` | `180000` | Connection timeout in ms. Auto-scaled **1.5×** for 200K flagship models (glm-5.3/5.2/5.1/5/4.7) and capped at 300000ms. Inactivity timer scales the same way (90–180s window). |
 | `zai.reasoningEffort` | `string` | `off` | Thinking depth for GLM models, translated per generation: **`off`** disables thinking (glm-5.3 maps to `low` — it cannot disable thinking), **`low`** lightweight, **`medium`** balanced (5.3 runs `high`), **`high`** enhanced — good default for coding, **`max`** deepest (slowest, most tokens). Reasoning is billed as output, so lowering this is the biggest quota saver. See [`doc/reasoning-effort-picker.md`](./doc/reasoning-effort-picker.md). |
-| `zai.maxRetries` | `number` | `2` | Automatic retries on transient network errors (fetch failed, timeout, 5xx, 429) with exponential backoff (1s → 2s → max 10s + jitter). |
+| `zai.maxRetries` | `number` | `2` | Automatic retries on transient errors (fetch failed, timeout, 5xx) with exponential backoff (1s → max 10s + jitter). **429 rate limits** get a dedicated cadence: 3s → 6s → 12s → 15s (cap) + jitter and 2 extra attempts (up to 5 total). **1305 overload** gets an even longer cadence: 4s → 20s (cap) + 3 extra attempts (up to 6 total, ~90s), since Z.AI overloads can persist >1 minute. |
 | `zai.defaultModel` | `string` | `""` | Model id to mark as the default selection in the Copilot Chat model picker (for example `glm-5.3`). Leave empty to mark no model as default; users can still pick any model manually. |
 | `zai.showUsageStatusBar` | `boolean` | `true` | Show the latest Z.AI usage summary (prompt→output tokens) in the VS Code status bar after each response. |
 | `zai.showQuotaStatusBar` | `boolean` | `true` | Show the Z.AI Coding Plan quota (5-hour / weekly) in the VS Code status bar. Hover for a graphical SVG donut chart; click to toggle between windows. |

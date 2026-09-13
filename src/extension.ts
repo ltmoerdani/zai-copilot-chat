@@ -1159,8 +1159,9 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
 
     const outputChannel = this.getOutputChannel();
 
-    // Estimate the output buffer for context window tracking
-    const estimatedInputTokens = estimateTotalTokens(apiMessages);
+    // Estimate the output buffer for context window tracking (includes the
+    // request-level tools schemas, which count against the prompt server-side)
+    const estimatedInputTokens = estimateTotalTokens(apiMessages) + estimateToolsTokens(options.tools);
     const maxAvailableOutput = Math.max(1024, limits.contextWindow - estimatedInputTokens);
     const contextWindowOutputBuffer = Math.min(limits.maxOutputTokens, maxAvailableOutput);
 
@@ -1268,9 +1269,81 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
         }
       }
 
+      // Z.AI error 1261 ("Prompt exceeds max length"): the server-side prompt
+      // limit was exceeded (char-based local estimate under-counted, or the
+      // conversation grew past the model's effective window). Retry ONCE with
+      // historical reasoning_content stripped — the largest safely-removable
+      // overhead — before surfacing an actionable error.
+      if (/"1261"|exceeds max length/i.test(message)) {
+        const hadReasoning = apiMessages.some((m) => typeof m.reasoning_content === "string" && m.reasoning_content.length > 0);
+        if (hadReasoning) {
+          this.log(`Z.AI error 1261 (prompt exceeds max length) — retrying once with historical reasoning_content stripped.`);
+          const retryMessages = apiMessages.map((m) => {
+            if (typeof m.reasoning_content === "string" && m.reasoning_content.length > 0) {
+              const { reasoning_content: _dropped, ...rest } = m;
+              return rest as ApiMessage;
+            }
+            return m;
+          });
+          try {
+            await streamChatCompletions(
+              CHAT_COMPLETIONS_URL,
+              apiKey,
+              model.id,
+              retryMessages,
+              options,
+              settings,
+              limits,
+              progress,
+              token,
+              outputChannel,
+              (toolCallIds, reasoningContent) => {
+                for (const toolCallId of toolCallIds) {
+                  this.reasoningContentByToolCallId.set(toolCallId, reasoningContent);
+                }
+              },
+              localRequestId,
+              contextWindowOutputBuffer,
+              (summary) => {
+                updateUsageStatusBar("Z.AI", model.id, summary);
+                const usageLog = formatUsageLogLine({
+                  promptTokens: summary.promptTokens,
+                  completionTokens: summary.completionTokens,
+                  totalTokens: summary.totalTokens,
+                  cachedTokens: summary.cachedTokens,
+                  finishReason: summary.finishReason,
+                });
+                if (usageLog) {
+                  outputChannel.appendLine(`[usage] ${usageLog}`);
+                }
+              },
+            );
+            this.log(`Request completed (1261 reasoning-stripped retry): model=${model.id}`);
+            void vscode.window.showWarningMessage(
+              `Z.AI: ${model.id} hit the prompt-length limit (1261). The request was retried without historical reasoning. Start a new chat or clear history to stay under the ${limits.contextWindow} token window.`,
+            );
+            return;
+          } catch (retryError) {
+            const retryMessage = retryError instanceof Error ? retryError.message : String(retryError);
+            this.log(`1261 reasoning-stripped retry also failed: ${retryMessage}`);
+            vscode.window.showErrorMessage(
+              `Z.AI: prompt for ${model.id} exceeds the model's max length (error 1261) even after trimming reasoning history. Start a new chat, clear chat history, or lower \`zai.maxInputTokens\` (e.g. 96000) so VS Code compacts sooner.`,
+            );
+            throw retryError;
+          }
+        }
+        vscode.window.showErrorMessage(
+          `Z.AI: prompt for ${model.id} exceeds the model's max length (error 1261). Start a new chat, clear chat history, or lower \`zai.maxInputTokens\` (e.g. 96000) so VS Code compacts sooner.`,
+        );
+        throw error;
+      }
+
       const isTimeout = message.includes("timed out") || message.includes("Timeout") || message.includes("inactive");
+      const isOverload = /"1305"|temporarily overloaded/i.test(message);
       const isFlagship = (MODEL_LIMITS[model.id]?.contextWindow ?? 0) >= 200000;
-      const friendlyMsg = isTimeout
+      const friendlyMsg = isOverload
+        ? `Z.AI servers are temporarily overloaded (error 1305) — ${model.id} requests were retried for ~90s without success. Try: (1) send again in a minute, (2) switch to another model (e.g. glm-5.3-flash / glm-4.5-flash), or (3) reduce request size. Detail: ${message}`
+        : isTimeout
         ? `Z.AI request to ${model.id} timed out. ${isFlagship
             ? `glm-5.3 / glm-5.2 / glm-5.1 / glm-5 / glm-4.7 are large-context flagship models (200K–1M) and need longer timeouts (default 3 min, inactivity 90-180s). Note: glm-5.3 always thinks — lowering \`zai.reasoningEffort\` also reduces latency.`
             : ``
@@ -1369,7 +1442,8 @@ async function streamChatCompletions(
 
   // Estimate input token usage to budget max_tokens appropriately.
   // This prevents sending a request where input + max_tokens > context window.
-  const estimatedInputTokens = estimateTotalTokens(messages);
+  // Includes the tools schemas — they are part of the server-side prompt.
+  const estimatedInputTokens = estimateTotalTokens(messages) + estimateToolsTokens(options.tools);
   const maxAvailableOutput = Math.max(1024, limits.contextWindow - estimatedInputTokens);
   const requestMaxTokens = Math.min(limits.maxOutputTokens, maxAvailableOutput);
 
@@ -1521,7 +1595,30 @@ function estimateTotalTokens(messages: ApiMessage[]): number {
       total += estimateTokenCount(msg.reasoning_content);
     }
   }
+  // Note: NO blanket safety multiplier on messages — calibration against
+  // real server promptTokens showed the ÷3.5 heuristic already runs ~1.19×
+ // high. The 96K advertised cap for 128K models provides the remaining margin.
   return total;
+}
+
+/** Token estimate for the request-level `tools` array (schemas are sent on
+ *  every request and easily add 10–20K tokens in agent mode, but were not
+ *  counted by estimateTotalTokens). */
+function estimateToolsTokens(tools?: readonly vscode.LanguageModelChatTool[]): number {
+  if (!tools?.length) {
+    return 0;
+  }
+  let total = 0;
+  for (const tool of tools) {
+    total += estimateTokenCount(tool.name ?? "");
+    total += estimateTokenCount(tool.description ?? "");
+    try {
+      total += estimateTokenCount(JSON.stringify(tool.inputSchema ?? {}));
+    } catch {
+      total += 64; // non-serializable schema — flat allowance
+    }
+  }
+  return Math.ceil(total * 1.15);
 }
 
 function mapOpenAiTools(tools: readonly vscode.LanguageModelChatTool[] | undefined): OpenAiToolDefinition[] {
@@ -1539,6 +1636,44 @@ function toolChoice(mode: vscode.LanguageModelChatToolMode): "auto" | "required"
   return mode === vscode.LanguageModelChatToolMode.Required ? "required" : "auto";
 }
 
+// Global request-start throttle. VS Code fires several requests in parallel
+// (utility/title generation + the main chat request). The Z.AI coding endpoint
+// enforces a request-rate limit (HTTP 429, error 1302 "Rate limit reached for
+// requests") that bursts trip instantly. Spacing request STARTS ≥750ms apart
+// defuses the burst without serializing the full streaming responses.
+const MIN_REQUEST_GAP_MS = 750;
+let requestStartChain: Promise<void> = Promise.resolve();
+let lastThrottledRequestStart = 0;
+
+async function throttleRequestStart(): Promise<void> {
+  const prev = requestStartChain;
+  let release!: () => void;
+  requestStartChain = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await prev;
+  const wait = lastThrottledRequestStart + MIN_REQUEST_GAP_MS - Date.now();
+  if (wait > 0) {
+    await new Promise((resolve) => setTimeout(resolve, wait));
+  }
+  lastThrottledRequestStart = Date.now();
+  release();
+}
+
+function isRateLimitError(error: Error): boolean {
+  return error.message.includes("429") || /"1302"|rate limit/i.test(error.message);
+}
+
+/** Z.AI error 1305 — server-side overload ("service may be temporarily
+ *  overloaded"). Distinct from 1302: this is the SERVER being out of capacity,
+ *  so (a) it can outlast the 3s→15s rate-limit cadence (observed >1min on
+ *  glm-4.6v-flash, 2026-09-13), and (b) aggressive parallel retries only add
+ *  load to an already-dying service — hence a longer, flatter cadence and
+ *  more attempts. */
+function isOverloadError(error: Error): boolean {
+  return /"1305"|temporarily overloaded/i.test(error.message);
+}
+
 async function streamZaiResponse(
   url: string,
   apiKey: string,
@@ -1554,7 +1689,14 @@ async function streamZaiResponse(
   contextWindowOutputBuffer?: number,
 ): Promise<void> {
   let lastError: Error | undefined;
-  const maxAttempts = 1 + settings.maxRetries; // 1 initial + N retries
+  let maxAttempts = 1 + settings.maxRetries; // 1 initial + N retries
+  // Rate-limit errors get extra patience: the Z.AI limiter window is longer
+  // than the default 1s/2s backoff cadence, so short retries all fail inside
+  // the same window (observed: 4 consecutive 1302 failures within 6s).
+  const RATE_LIMIT_EXTRA_ATTEMPTS = 2;
+  // Overloads (1305) get even more: observed outlasting the full 3s→15s
+  // rate-limit chain (>1min on glm-4.6v-flash), so pace it out to ~90s.
+  const OVERLOAD_EXTRA_ATTEMPTS = 3;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     if (token.isCancellationRequested) {
@@ -1562,15 +1704,23 @@ async function streamZaiResponse(
     }
 
     if (attempt > 0) {
-      // Exponential backoff with jitter to avoid thundering herd
-      const baseDelay = Math.min(1000 * 2 ** (attempt - 1), 10000);
+      const isOverload = lastError ? isOverloadError(lastError) : false;
+      const isRateLimit = lastError ? isRateLimitError(lastError) : false;
+      // Overload: longer, flatter cadence (4s base, 20s cap) — hammering an
+      // overloaded server harder is counterproductive. Rate limits: 3s base,
+      // 15s cap. Other retryable errors keep the fast 1s cadence.
+      const base = isOverload ? Math.min(4000 * 2 ** (attempt - 1), 20000)
+                     : isRateLimit ? Math.min(3000 * 2 ** (attempt - 1), 15000)
+                                  : Math.min(1000 * 2 ** (attempt - 1), 10000);
       const jitter = Math.random() * 500;
-      const delay = baseDelay + jitter;
-      output.appendLine(`Retry ${attempt}/${settings.maxRetries} in ${Math.round(delay)}ms after error: ${lastError?.message}`);
+      const delay = base + jitter;
+      const kind = isOverload ? " (overload)" : isRateLimit ? " (rate limit)" : "";
+      output.appendLine(`Retry ${attempt}/${maxAttempts - 1} in ${Math.round(delay)}ms${kind} after error: ${lastError?.message}`);
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
 
     try {
+      await throttleRequestStart();
       await doStreamFetch(url, apiKey, body, progress, token, settings, extractStreamParts, extractFullParts, output, onUsageData, localRequestId, contextWindowOutputBuffer);
       return; // success
     } catch (error) {
@@ -1584,6 +1734,15 @@ async function streamZaiResponse(
       // Only retry on network-level errors or 5xx/429
       if (!isRetryableError(lastError)) {
         throw lastError;
+      }
+
+      // Grant extra attempts once we know the failure class — the original
+      // budget (maxRetries) was tuned for transient 5xx, not limiter windows
+      // or sustained overload.
+      if (isOverloadError(lastError)) {
+        maxAttempts = Math.max(maxAttempts, 1 + settings.maxRetries + OVERLOAD_EXTRA_ATTEMPTS);
+      } else if (isRateLimitError(lastError)) {
+        maxAttempts = Math.max(maxAttempts, 1 + settings.maxRetries + RATE_LIMIT_EXTRA_ATTEMPTS);
       }
     }
   }
@@ -1763,8 +1922,16 @@ function isRetryableError(error: Error): boolean {
 }
 
 function isNonRetryableHttpError(error: Error): boolean {
-  // 4xx client errors (except 429) should not be retried
-  return /\(4[0-8]\d\)/.test(error.message) || /\(400\)/.test(error.message);
+  // 4xx client errors should not be retried — EXCEPT 429 rate limits.
+  // BUG FIX (2026-09-13): the old regex /\(4[0-8]\d\)/ was meant to exclude
+  // 429 but the character class applies to the SECOND digit, so "429"
+  // (4, 2∈[0-8], 9) matched and every 429 threw immediately on the first
+  // attempt — backoff/retry logic never ran and VS Code's own ~1.5s outer
+  // retries were the only thing masking it.
+  if (error.message.includes("429")) {
+    return false;
+  }
+  return /\(4\d\d\)/.test(error.message);
 }
 
 function parseServerSentEvent(
@@ -2380,8 +2547,13 @@ function modelLimits(modelId: string, settings = getSettings()): ModelLimits {
   // The context window is the TOTAL token budget (input + output).
   // Advertised max input = context window minus a reserve for output.
   // This tells VS Code when to start compacting the conversation.
+  // Small-context models (128K tier, e.g. glm-4.5-flash) get an extra safety
+  // margin (75% of the window) because the char-based token estimator
+  // systematically under-counts code/JSON-heavy prompts — server-side limit
+  // hits (Z.AI error 1261 "Prompt exceeds max length") before VS Code compacts.
   const outputReserve = Math.min(maxOutputTokens, OUTPUT_TOKEN_RESERVE);
-  const advertisedMaxInputTokens = Math.max(1, contextWindow - outputReserve);
+  const smallContextCap = contextWindow <= 131072 ? Math.floor(contextWindow * 0.75) : Infinity;
+  const advertisedMaxInputTokens = Math.max(1, Math.min(contextWindow - outputReserve, smallContextCap));
   const advertisedMaxOutputTokens = Math.max(1, outputReserve);
 
   return {
@@ -2398,14 +2570,22 @@ function estimateTokenCount(value: string): number {
     return 0;
   }
 
-  const normalized = value.replace(/\s+/g, " ").trim();
-  if (!normalized) {
+  const trimmed = value.trim();
+  if (!trimmed) {
     return 0;
   }
 
-  const cjkCharacters = normalized.match(/[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]/gu)?.length ?? 0;
-  const words = normalized.match(/[A-Za-z0-9_]+|[^\sA-Za-z0-9_]/gu)?.length ?? 0;
-  const charEstimate = Math.ceil(normalized.length / 4);
+  // NOTE: do NOT collapse internal whitespace — tokenizers count indentation
+  // and separators in code/JSON tool results. Collapsing them caused the old
+  // estimator to under-count by 20–30%.
+  const cjkCharacters = trimmed.match(/[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]/gu)?.length ?? 0;
+  const words = trimmed.match(/[A-Za-z0-9_]+|[^\sA-Za-z0-9_]/gu)?.length ?? 0;
+  // chars ÷ 3.5: calibrated against real server telemetry (2026-09-13,
+  // glm-4.5-flash agent session): chars÷3 × 1.15 over-counted ~1.59×
+  // (est 106K vs real promptTokens 66.7K). ÷3.5 without the message
+  // multiplier lands at ~1.19× — enough safety margin below the server-side
+  // prompt limit (error 1261) without triggering premature compaction.
+  const charEstimate = Math.ceil(trimmed.length / 3.5);
 
   return Math.max(1, Math.ceil(Math.max(words * 1.15, charEstimate, cjkCharacters)));
 }
