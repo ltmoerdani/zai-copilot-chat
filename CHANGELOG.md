@@ -2,6 +2,30 @@
 
 All notable changes to the **Z.AI Copilot Chat** extension are documented here.
 
+## 0.6.3 — 2026-09-13
+
+### Fixed
+
+- **CRITICAL: 429 rate limits were never retried** — the retryability guard `isNonRetryableHttpError` used the regex `/\(4[0-8]\d\)/`, whose character class applies to the *second* digit, so `429` (4, 2∈[0-8], 9) **matched** and every rate-limit response (`429` / Z.AI error `1302` "Rate limit reached for requests") threw immediately on the first attempt. The entire backoff/retry path was dead code for 429; the ~1.5s re-attempts users saw were VS Code's own outer provider retries. Now `429` is explicitly retryable before the 4xx regex runs. Verified live: `Retry 1/4 in 3008ms (rate limit)` → `4/4 in 15483ms` chains now execute and recover. Full forensic write-up: [`doc/error-1261-429-fix.md`](./doc/error-1261-429-fix.md).
+
+### Added
+
+- **Rate-limit-aware backoff** — 429/1302 errors now retry with a longer cadence (3s → 6s → 12s → 15s cap, +jitter, **+2 extra attempts** up to 5 total) because the Z.AI limiter window outlasts the old 1s/2s cadence (observed: 4 consecutive failures within 6s). Transient 5xx keeps the fast 1s-based cadence.
+
+- **Overload-aware backoff (1305)** — Z.AI error 1305 ("service temporarily overloaded") is treated separately from 1302 rate limits with a longer, flatter cadence (4s → 20s cap, **+3 extra attempts** up to 6 total, ~90s total window) because observed overloads outlast the 3s/15s rate-limit chain (glm-4.6v-flash, 2026-09-13: overload persisted >1 minute). Exhaustion surfaces a friendly guidance message instead of a raw JSON dump.
+
+- **Global request-start throttle** — VS Code fires 3–4 requests in parallel per turn (small utility/title-generation calls + the main request), which tripped the coding endpoint's request-rate limiter as a burst. Request *starts* are now spaced ≥750ms apart globally (`MIN_REQUEST_GAP_MS`); streaming responses still run in parallel. Log evidence: two same-second requests (messages=5/6) completed with zero 429s after the fix.
+
+- **Z.AI error 1261 handler ("Prompt exceeds max length")** — when the server-side prompt limit is exceeded, the extension retries once with historical `reasoning_content` stripped (the largest safely-removable overhead), and on failure surfaces an actionable message (start a new chat / clear history / lower `zai.maxInputTokens`) instead of a raw 400 dump.
+
+### Changed
+
+- **Token estimator recalibrated** — `estimateTokenCount` no longer collapses internal whitespace (tokenizers count indentation in code/JSON tool results; collapsing under-counted 20–30%) and uses `chars ÷ 3.5` (was `÷ 4`). Calibrated against real server telemetry: `÷3` + 1.15× multiplier over-counted 1.59× (est 106K vs real `promptTokens` 66.7K); `÷3.5` without the multiplier lands ≈1.4× high — safely conservative without triggering premature compaction.
+
+- **Tools schemas now counted in the token budget** — the request-level `tools` array (easily 10–20K tokens in agent mode) is included in `estimateTotalTokens` at both budget sites (`max_tokens` clamping and context-window tracking).
+
+- **Advertised input window capped at 75% for 128K-tier models** — `glm-4.5`-series and friends now advertise ~96K max input to VS Code instead of 111.6K, so conversation compaction happens before the server-side prompt limit (error 1261) can be hit. 200K/1M-tier models are unaffected.
+
 ## 0.6.2 — 2026-09-12
 
 ### Added
