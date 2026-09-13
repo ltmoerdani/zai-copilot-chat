@@ -1339,8 +1339,11 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
       }
 
       const isTimeout = message.includes("timed out") || message.includes("Timeout") || message.includes("inactive");
+      const isOverload = /"1305"|temporarily overloaded/i.test(message);
       const isFlagship = (MODEL_LIMITS[model.id]?.contextWindow ?? 0) >= 200000;
-      const friendlyMsg = isTimeout
+      const friendlyMsg = isOverload
+        ? `Z.AI servers are temporarily overloaded (error 1305) — ${model.id} requests were retried for ~90s without success. Try: (1) send again in a minute, (2) switch to another model (e.g. glm-5.3-flash / glm-4.5-flash), or (3) reduce request size. Detail: ${message}`
+        : isTimeout
         ? `Z.AI request to ${model.id} timed out. ${isFlagship
             ? `glm-5.3 / glm-5.2 / glm-5.1 / glm-5 / glm-4.7 are large-context flagship models (200K–1M) and need longer timeouts (default 3 min, inactivity 90-180s). Note: glm-5.3 always thinks — lowering \`zai.reasoningEffort\` also reduces latency.`
             : ``
@@ -1661,6 +1664,16 @@ function isRateLimitError(error: Error): boolean {
   return error.message.includes("429") || /"1302"|rate limit/i.test(error.message);
 }
 
+/** Z.AI error 1305 — server-side overload ("service may be temporarily
+ *  overloaded"). Distinct from 1302: this is the SERVER being out of capacity,
+ *  so (a) it can outlast the 3s→15s rate-limit cadence (observed >1min on
+ *  glm-4.6v-flash, 2026-09-13), and (b) aggressive parallel retries only add
+ *  load to an already-dying service — hence a longer, flatter cadence and
+ *  more attempts. */
+function isOverloadError(error: Error): boolean {
+  return /"1305"|temporarily overloaded/i.test(error.message);
+}
+
 async function streamZaiResponse(
   url: string,
   apiKey: string,
@@ -1681,6 +1694,9 @@ async function streamZaiResponse(
   // than the default 1s/2s backoff cadence, so short retries all fail inside
   // the same window (observed: 4 consecutive 1302 failures within 6s).
   const RATE_LIMIT_EXTRA_ATTEMPTS = 2;
+  // Overloads (1305) get even more: observed outlasting the full 3s→15s
+  // rate-limit chain (>1min on glm-4.6v-flash), so pace it out to ~90s.
+  const OVERLOAD_EXTRA_ATTEMPTS = 3;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     if (token.isCancellationRequested) {
@@ -1688,14 +1704,18 @@ async function streamZaiResponse(
     }
 
     if (attempt > 0) {
+      const isOverload = lastError ? isOverloadError(lastError) : false;
       const isRateLimit = lastError ? isRateLimitError(lastError) : false;
-      // Rate limits need a longer base (limiter windows are multi-second);
-      // other retryable errors keep the fast cadence.
-      const base = isRateLimit ? Math.min(3000 * 2 ** (attempt - 1), 15000)
-                              : Math.min(1000 * 2 ** (attempt - 1), 10000);
+      // Overload: longer, flatter cadence (4s base, 20s cap) — hammering an
+      // overloaded server harder is counterproductive. Rate limits: 3s base,
+      // 15s cap. Other retryable errors keep the fast 1s cadence.
+      const base = isOverload ? Math.min(4000 * 2 ** (attempt - 1), 20000)
+                     : isRateLimit ? Math.min(3000 * 2 ** (attempt - 1), 15000)
+                                  : Math.min(1000 * 2 ** (attempt - 1), 10000);
       const jitter = Math.random() * 500;
       const delay = base + jitter;
-      output.appendLine(`Retry ${attempt}/${maxAttempts - 1} in ${Math.round(delay)}ms${isRateLimit ? " (rate limit)" : ""} after error: ${lastError?.message}`);
+      const kind = isOverload ? " (overload)" : isRateLimit ? " (rate limit)" : "";
+      output.appendLine(`Retry ${attempt}/${maxAttempts - 1} in ${Math.round(delay)}ms${kind} after error: ${lastError?.message}`);
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
 
@@ -1716,9 +1736,12 @@ async function streamZaiResponse(
         throw lastError;
       }
 
-      // Grant extra attempts once we know it is a rate limit — the original
-      // budget (maxRetries) was tuned for transient 5xx, not limiter windows.
-      if (isRateLimitError(lastError)) {
+      // Grant extra attempts once we know the failure class — the original
+      // budget (maxRetries) was tuned for transient 5xx, not limiter windows
+      // or sustained overload.
+      if (isOverloadError(lastError)) {
+        maxAttempts = Math.max(maxAttempts, 1 + settings.maxRetries + OVERLOAD_EXTRA_ATTEMPTS);
+      } else if (isRateLimitError(lastError)) {
         maxAttempts = Math.max(maxAttempts, 1 + settings.maxRetries + RATE_LIMIT_EXTRA_ATTEMPTS);
       }
     }
