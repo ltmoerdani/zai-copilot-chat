@@ -40,6 +40,8 @@ import {
 import {
   isReasoningEffort,
   resolveReasoningParams,
+  describeReasoning,
+  effortSchemaProperty,
   type ReasoningEffort,
 } from "./reasoning";
 
@@ -107,6 +109,10 @@ interface ApiSettings {
   debugReasoning: boolean;
   requestTimeout: number;
   maxRetries: number;
+  /** Stream reasoning_content into chat as <think>…</think> text. */
+  showThinking: boolean;
+  /** Emit verbose diagnostics (model advertisement, token budget, timeouts) to the output channel. */
+  verboseLogs: boolean;
   /** User reasoning level (off/low/medium/high/max), translated per model generation. */
   reasoningEffort: ReasoningEffort;
 }
@@ -754,6 +760,13 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
     this.getOutputChannel().appendLine(`[${new Date().toISOString()}] ${message}`);
   }
 
+  /** Verbose diagnostics — only emitted when `zai.verboseLogs` is on. */
+  private logVerbose(message: string): void {
+    if (getSettings().verboseLogs) {
+      this.log(message);
+    }
+  }
+
   private clearCachedApiKeys(): string[] {
     const keys = new Set<string>();
     for (const apiKey of this.apiKeysByModelId.values()) {
@@ -919,7 +932,7 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
     }
 
     const statusBar = vscode.window.setStatusBarMessage(`$(loading~spin) Testing Z.AI connection...`);
-    this.log(`Testing connection to ${CHAT_COMPLETIONS_URL}`);
+    this.logVerbose(`Testing connection to ${CHAT_COMPLETIONS_URL}`);
 
     try {
       const response = await fetch(CHAT_COMPLETIONS_URL, {
@@ -938,7 +951,7 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
 
       const responseText = await response.text();
       statusBar.dispose();
-      this.log(`Test response (${response.status}): ${responseText}`);
+      this.logVerbose(`Test response (${response.status}): ${responseText}`);
       this.getOutputChannel().show(true);
 
       if (response.ok) {
@@ -1308,12 +1321,12 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
     }
 
     if (token.isCancellationRequested) {
-      this.log("provideLanguageModelChatInformation: cancelled before fetch.");
+    this.logVerbose("provideLanguageModelChatInformation: cancelled before fetch.");
       return [];
     }
 
     const models = await this.fetchModels(apiKey);
-    this.log(
+    this.logVerbose(
       `provideLanguageModelChatInformation: advertising ${models.length} model(s) to VS Code [${models.slice(0, 3).join(", ")}${models.length > 3 ? ", …" : ""}]`,
     );
     const settings = getSettings();
@@ -1330,7 +1343,7 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
         // broke `modelFamily` routing and sticky grouping.
         family: "glm",
         version: "1.0.0",
-        detail: "Z.AI",
+        detail: `Z.AI · ${describeReasoning(modelId, settings.reasoningEffort)}`,
         tooltip: `Z.AI model: ${modelId}`,
         // VS Code 1.126 chatModelPicker.ts expects category as string (or omitted).
         // Sending an object { label, order } crashes the model picker popup
@@ -1340,6 +1353,19 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
         maxInputTokens: limits.advertisedMaxInputTokens,
         maxOutputTokens: limits.advertisedMaxOutputTokens,
         capabilities: modelCapabilities(modelId),
+        // Per-model "Thinking Effort" chips in the model picker details popup.
+        // VS Code persists the user's pick per model and replays it on every
+        // request via `options.modelConfiguration` (read in
+        // provideLanguageModelChatResponse). Silently ignored by older VS Code
+        // builds that don't render configurationSchema.
+        ...(effortSchemaProperty(modelId)
+          ? {
+              configurationSchema: {
+                type: "object",
+                properties: { reasoningEffort: effortSchemaProperty(modelId)! }
+              }
+            }
+          : {}),
         endpointKind: "chat-completions"
       };
     });
@@ -1380,11 +1406,29 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
       );
     let apiMessages = buildApiMessages(nativeVision);
     const sentNativeImages = nativeVision && apiMessages.some((m) => Array.isArray(m.content) && m.content.some((p) => p.type === "image_url"));
-    const settings = getSettings();
+    const baseSettings = getSettings();
+    // Per-model "Thinking Effort" picked in the model picker (see
+    // configurationSchema in provideLanguageModelChatInformation) overrides the
+    // global `zai.reasoningEffort` setting for this request. Older VS Code
+    // builds shipped the field under `configuration` — only accept that shape
+    // when it actually carries a reasoningEffort key (never mistake an auth
+    // configuration object for model settings).
+    const modelConfiguration =
+      (options as { modelConfiguration?: Record<string, unknown> }).modelConfiguration;
+    const legacyConfiguration =
+      (options as { configuration?: Record<string, unknown> }).configuration;
+    const perModelEffort =
+      modelConfiguration?.reasoningEffort ?? legacyConfiguration?.reasoningEffort;
+    const settings = isReasoningEffort(perModelEffort)
+      ? { ...baseSettings, reasoningEffort: perModelEffort }
+      : baseSettings;
+    if (isReasoningEffort(perModelEffort)) {
+      this.log(`Reasoning: per-model effort '${perModelEffort}' (model picker) overrides setting '${baseSettings.reasoningEffort}'.`);
+    }
     const limits = modelLimits(model.id, settings);
     const localRequestId = crypto.randomUUID();
 
-    this.log(`Request: model=${model.id} messages=${apiMessages.length}${sentNativeImages ? " images=inline(image_url)" : ""}`);
+    this.logVerbose(`Request: model=${model.id} messages=${apiMessages.length}${sentNativeImages ? " images=inline(image_url)" : ""}`);
     if (settings.debugReasoning) {
       this.log("Reasoning debug is enabled. Provider reasoning_content will be written to this output channel when available.");
     }
@@ -1425,12 +1469,12 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
             cachedTokens: summary.cachedTokens,
             finishReason: summary.finishReason,
           });
-          if (usageLog) {
+          if (usageLog && getSettings().verboseLogs) {
             outputChannel.appendLine(`[usage] ${usageLog}`);
           }
         },
       );
-      this.log(`Request completed: model=${model.id}`);
+      this.logVerbose(`Request completed: model=${model.id}`);
     } catch (error) {
       let message = error instanceof Error ? error.message : String(error);
 
@@ -1474,12 +1518,12 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
                 cachedTokens: summary.cachedTokens,
                 finishReason: summary.finishReason,
               });
-              if (usageLog) {
+              if (usageLog && getSettings().verboseLogs) {
                 outputChannel.appendLine(`[usage] ${usageLog}`);
               }
             },
           );
-          this.log(`Request completed (images stripped retry): model=${model.id}`);
+          this.logVerbose(`Request completed (images stripped retry): model=${model.id}`);
           void vscode.window.showWarningMessage(
             `Z.AI: ${model.id} rejected inline images — the request was retried without them. Enable the vision bridge (Z.AI: Setup Vision Bridge) for image support on this model.`,
           );
@@ -1545,12 +1589,12 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
                   cachedTokens: summary.cachedTokens,
                   finishReason: summary.finishReason,
                 });
-                if (usageLog) {
+                if (usageLog && getSettings().verboseLogs) {
                   outputChannel.appendLine(`[usage] ${usageLog}`);
                 }
               },
             );
-            this.log(`Request completed (1261 reasoning-stripped retry): model=${model.id}`);
+            this.logVerbose(`Request completed (1261 reasoning-stripped retry): model=${model.id}`);
             void vscode.window.showWarningMessage(
               `Z.AI: ${model.id} hit the prompt-length limit (1261). The request was retried without historical reasoning. Start a new chat or clear history to stay under the ${limits.contextWindow} token window.`,
             );
@@ -1664,13 +1708,17 @@ async function streamChatCompletions(
   onTransportSummary?: (summary: TransportRequestSummary) => void,
 ): Promise<void> {
   const tools = mapOpenAiTools(options.tools);
-  const extractor = new OpenAiResponseExtractor(onReasoningContent, (reasoningContent) => {
-    if (settings.debugReasoning) {
-      output.appendLine("[reasoning_content]");
-      output.appendLine(reasoningContent);
-      output.appendLine("[/reasoning_content]");
-    }
-  });
+  const extractor = new OpenAiResponseExtractor(
+    onReasoningContent,
+    (reasoningContent) => {
+      if (settings.debugReasoning) {
+        output.appendLine("[reasoning_content]");
+        output.appendLine(reasoningContent);
+        output.appendLine("[/reasoning_content]");
+      }
+    },
+    settings.showThinking,
+  );
 
   // Estimate input token usage to budget max_tokens appropriately.
   // This prevents sending a request where input + max_tokens > context window.
@@ -1695,8 +1743,9 @@ async function streamChatCompletions(
   //   glm-5.3+  forced thinking — off→low, medium→high (others pass through)
   //   glm-5.2   thinking toggle + extended reasoning_effort ("none" skips thinking)
   //   glm ≤ 5.1 thinking toggle only (reasoning_effort unsupported)
-  // reasoning_content is still captured by the extractor (never rendered;
-  // debug logging via `zai.debugReasoning`).
+  // reasoning_content is captured by the extractor and — when
+  // `zai.showThinking` is on (default) — streamed into chat wrapped in
+  // <think>…</think>; debug logging via `zai.debugReasoning`.
   const reasoning = resolveReasoningParams(modelId, settings.reasoningEffort);
   if (reasoning.thinking) {
     requestBody.thinking = reasoning.thinking;
@@ -1708,7 +1757,9 @@ async function streamChatCompletions(
     output.appendLine(`[${new Date().toISOString()}] Reasoning: ${reasoning.notice}`);
   }
 
-  output.appendLine(`[${new Date().toISOString()}] Token budget: model=${modelId} input≈${estimatedInputTokens} maxOut=${requestMaxTokens} (contextWindow=${limits.contextWindow}, budgetUsed=${estimatedInputTokens + requestMaxTokens})`);
+  if (settings.verboseLogs) {
+    output.appendLine(`[${new Date().toISOString()}] Token budget: model=${modelId} input≈${estimatedInputTokens} maxOut=${requestMaxTokens} (contextWindow=${limits.contextWindow}, budgetUsed=${estimatedInputTokens + requestMaxTokens})`);
+  }
 
   if (estimatedInputTokens >= limits.contextWindow) {
     output.appendLine(`[${new Date().toISOString()}] WARNING: Input tokens (${estimatedInputTokens}) >= context window (${limits.contextWindow}). Request may fail.`);
@@ -1754,10 +1805,6 @@ async function streamChatCompletions(
       ? {}
       : { finishReason: usageSummary.finishReason }),
   };
-
-  output.appendLine(
-    `[response-summary] model=${modelId} durationMs=${durationMs} promptTokens=${usageSummary.promptTokens ?? "n/a"} completionTokens=${usageSummary.completionTokens ?? "n/a"} totalTokens=${usageSummary.totalTokens ?? "n/a"} cachedTokens=${usageSummary.cachedTokens ?? "n/a"} finishReason=${usageSummary.finishReason ?? "<unknown>"}`,
-  );
 
   const usageLog = formatUsageLogLine({
     promptTokens: usageSummary.promptTokens,
@@ -2014,12 +2061,14 @@ async function doStreamFetch(
     Math.round(settings.requestTimeout * modelTimeoutMultiplier)
   );
 
-  output.appendLine(
-    `[${new Date().toISOString()}] Timeout config: model=${modelId || "?"} ` +
-    `flagship=${isFlagshipModel} multiplier=${modelTimeoutMultiplier}× ` +
-    `connectionTimeout=${effectiveConnectionTimeout}ms ` +
-    `(base=${settings.requestTimeout}ms, max=300000ms)`
-  );
+  if (settings.verboseLogs) {
+    output.appendLine(
+      `[${new Date().toISOString()}] Timeout config: model=${modelId || "?"} ` +
+      `flagship=${isFlagshipModel} multiplier=${modelTimeoutMultiplier}× ` +
+      `connectionTimeout=${effectiveConnectionTimeout}ms ` +
+      `(base=${settings.requestTimeout}ms, max=300000ms)`
+    );
+  }
 
   // Connection timeout: abort if the initial connection / headers take too long.
   // This is separate from the inactivity timeout below.
@@ -2458,8 +2507,13 @@ class OpenAiResponseExtractor {
 
   constructor(
     private readonly onReasoningContent?: (toolCallIds: string[], reasoningContent: string) => void,
-    private readonly onReasoningDebug?: (reasoningContent: string) => void
+    private readonly onReasoningDebug?: (reasoningContent: string) => void,
+    /** When true, reasoning_content is streamed into chat wrapped in <think>…</think>. */
+    private readonly showThinking = false
   ) {}
+
+  /** Whether a thinking part was emitted (to avoid mixing fallback text). */
+  private thinkOpened = false;
 
   extractStreamParts(data: unknown): vscode.LanguageModelResponsePart[] {
     if (!isRecord(data) || !Array.isArray(data.choices)) {
@@ -2474,7 +2528,24 @@ class OpenAiResponseExtractor {
     const parts: vscode.LanguageModelResponsePart[] = [];
     const delta = first.delta;
     if (isRecord(delta)) {
-      if (typeof delta.content === "string") {
+      // Reasoning deltas are streamed visibly (wrapped in <think>…</think>)
+      // when `zai.showThinking` is on, and always accumulated for debug
+      // logging / tool-call context regardless.
+      const reasoningDelta = typeof delta.reasoning_content === "string" ? delta.reasoning_content : "";
+      if (reasoningDelta) {
+        this.reasoningContent += reasoningDelta;
+        if (this.showThinking) {
+          const part = createThinkingPart(reasoningDelta);
+          if (part) {
+            this.thinkOpened = true;
+            parts.push(part);
+          }
+          // If LanguageModelThinkingPart is unavailable on this host, reasoning
+          // is dropped from the visible stream (debug log still captures it) —
+          // raw <think> text is NEVER emitted, it renders as literal text.
+        }
+      }
+      if (typeof delta.content === "string" && delta.content) {
         // Defensive: some Z.AI API versions leak reasoning into `content` instead
         // of `reasoning_content` when thinking isn't properly disabled.
         // Filter out <think>...</think> blocks that may appear inline.
@@ -2482,9 +2553,6 @@ class OpenAiResponseExtractor {
         if (filteredContent) {
           parts.push(new vscode.LanguageModelTextPart(filteredContent));
         }
-      }
-      if (typeof delta.reasoning_content === "string") {
-        this.reasoningContent += delta.reasoning_content;
       }
       this.collectOpenAiToolCalls(delta.tool_calls);
     }
@@ -2497,8 +2565,7 @@ class OpenAiResponseExtractor {
     // into the next request's context via stale state.
     if (first.finish_reason === "stop" && this.reasoningContent.trim()) {
       this.onReasoningDebug?.(this.reasoningContent);
-      // Note: we deliberately do NOT push reasoning as TextPart here —
-      // reasoning must never appear in the user-visible chat output.
+      this.thinkOpened = false;
       this.reasoningContent = "";
     }
 
@@ -2600,24 +2667,50 @@ class OpenAiResponseExtractor {
     return output;
   }
 
-  private flushToolCalls(): vscode.LanguageModelToolCallPart[] {
+  private flushToolCalls(): vscode.LanguageModelResponsePart[] {
+    const parts: vscode.LanguageModelResponsePart[] = [];
+    this.thinkOpened = false;
     const toolCalls = Array.from(this.pendingToolCalls.values())
       .filter((toolCall) => toolCall.name);
-    const parts = toolCalls
+    parts.push(...toolCalls
       .map((toolCall, index) => new vscode.LanguageModelToolCallPart(
         toolCall.id || `zai-tool-${Date.now()}-${index}`,
         toolCall.name,
         parseToolInput(toolCall.arguments)
-      ));
+      )));
 
     if (this.reasoningContent.trim()) {
       this.onReasoningDebug?.(this.reasoningContent);
-      this.onReasoningContent?.(parts.map((part) => part.callId), this.reasoningContent);
+      this.onReasoningContent?.(toolCalls.map((toolCall) => toolCall.id), this.reasoningContent);
     }
 
     this.pendingToolCalls.clear();
     this.reasoningContent = "";
     return parts;
+  }
+}
+
+/**
+ * Guarded factory for the proposed `vscode.LanguageModelThinkingPart`.
+ *
+ * Returns undefined when the API is unavailable on this host — the caller then
+ * drops the reasoning chunk from the visible stream (raw <think> text is never
+ * emitted; it renders as literal text in Copilot Chat).
+ *
+ * Pattern from `opencode-copilot-chat` src/transports/streamParts.ts.
+ * Never throws: an emit failure must not break the visible response.
+ */
+function createThinkingPart(value: string): vscode.LanguageModelResponsePart | undefined {
+  const ctor = (
+    vscode as unknown as { LanguageModelThinkingPart?: unknown }
+  ).LanguageModelThinkingPart;
+  if (typeof ctor !== "function") {
+    return undefined;
+  }
+  try {
+    return new (ctor as new (v: string | string[]) => vscode.LanguageModelResponsePart)(value);
+  } catch {
+    return undefined;
   }
 }
 
@@ -2765,6 +2858,8 @@ function getSettings(): ApiSettings {
     maxOutputTokensOverride: config.get("maxTokens", 0),
     maxInputTokensOverride: config.get("maxInputTokens", 0),
     debugReasoning: config.get("debugReasoning", false),
+    showThinking: config.get("showThinking", true),
+    verboseLogs: config.get("verboseLogs", false),
     requestTimeout: config.get("requestTimeout", 120000),
     maxRetries: config.get("maxRetries", 2),
     reasoningEffort: isReasoningEffort(reasoningEffortRaw) ? reasoningEffortRaw : "off"

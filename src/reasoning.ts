@@ -132,3 +132,71 @@ export function resolveReasoningParams(
       "glm-5.1 and below only support thinking on/off — the effort level was ignored.",
   };
 }
+
+/**
+ * JSON-schema-like `reasoningEffort` property for the model picker's
+ * per-model configuration popup ("Thinking Effort" chips, same mechanism the
+ * OpenCode extension uses). Attached by `extension.ts` as
+ * `configurationSchema` on each advertised model; VS Code persists the user's
+ * pick and replays it per request via `options.modelConfiguration`.
+ *
+ * The enum is generation-aware — never offers a value whose wire translation
+ * would be surprising when a closer value exists:
+ * - glm-5.3+: forced thinking, but `off` is still offered and translated to
+ *   `low` (lightweight reasoning) — matches our quota-saving default.
+ * - other GLM: the full level set.
+ * - non-GLM: `undefined` — no options rendered (endpoint is GLM-only).
+ *
+ * Contract: pure — no `vscode` import; the returned object is plain JSON so
+ * it can be spread straight into `configurationSchema`.
+ */
+export function effortSchemaProperty(modelId: string):
+  | Record<string, unknown>
+  | undefined {
+  if (!modelId.startsWith("glm-")) {
+    return undefined;
+  }
+  const efforts = isAlwaysThinkingModel(modelId)
+    ? (["off", "low", "high", "max"] as const)
+    : REASONING_EFFORTS;
+  return {
+    type: "string",
+    title: "Thinking Effort",
+    enum: [...efforts],
+    enumItemLabels: efforts.map(capitalize),
+    enumDescriptions: efforts.map((effort) => EFFORT_DESCRIPTIONS[effort]),
+    default: "off",
+    group: "navigation",
+  };
+}
+
+function capitalize(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+const EFFORT_DESCRIPTIONS: Readonly<Record<ReasoningEffort, string>> = {
+  off: "Fastest responses",
+  low: "Lightweight reasoning",
+  medium: "Balanced reasoning and speed",
+  high: "Greater reasoning depth but slower",
+  max: "Maximum reasoning effort (server default)",
+};
+
+/**
+ * Short human-readable status of what will actually be sent for one model +
+ * effort pair. Used for the model picker `detail` line so the active thinking
+ * level is visible without opening settings.
+ */
+export function describeReasoning(modelId: string, effort: ReasoningEffort): string {
+  const resolved = resolveReasoningParams(modelId, effort);
+  if (!resolved.thinking) {
+    return "reasoning: n/a";
+  }
+  if (resolved.thinking.type === "disabled") {
+    return "thinking off";
+  }
+  const label = resolved.reasoningEffort !== undefined
+    ? `thinking: ${resolved.reasoningEffort}`
+    : "thinking: on";
+  return resolved.notice ? `${label} (adjusted)` : label;
+}
