@@ -111,6 +111,8 @@ interface ApiSettings {
   maxRetries: number;
   /** Stream reasoning_content into chat as <think>…</think> text. */
   showThinking: boolean;
+  /** Emit verbose diagnostics (model advertisement, token budget, timeouts) to the output channel. */
+  verboseLogs: boolean;
   /** User reasoning level (off/low/medium/high/max), translated per model generation. */
   reasoningEffort: ReasoningEffort;
 }
@@ -758,6 +760,13 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
     this.getOutputChannel().appendLine(`[${new Date().toISOString()}] ${message}`);
   }
 
+  /** Verbose diagnostics — only emitted when `zai.verboseLogs` is on. */
+  private logVerbose(message: string): void {
+    if (getSettings().verboseLogs) {
+      this.log(message);
+    }
+  }
+
   private clearCachedApiKeys(): string[] {
     const keys = new Set<string>();
     for (const apiKey of this.apiKeysByModelId.values()) {
@@ -923,7 +932,7 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
     }
 
     const statusBar = vscode.window.setStatusBarMessage(`$(loading~spin) Testing Z.AI connection...`);
-    this.log(`Testing connection to ${CHAT_COMPLETIONS_URL}`);
+    this.logVerbose(`Testing connection to ${CHAT_COMPLETIONS_URL}`);
 
     try {
       const response = await fetch(CHAT_COMPLETIONS_URL, {
@@ -942,7 +951,7 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
 
       const responseText = await response.text();
       statusBar.dispose();
-      this.log(`Test response (${response.status}): ${responseText}`);
+      this.logVerbose(`Test response (${response.status}): ${responseText}`);
       this.getOutputChannel().show(true);
 
       if (response.ok) {
@@ -1312,12 +1321,12 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
     }
 
     if (token.isCancellationRequested) {
-      this.log("provideLanguageModelChatInformation: cancelled before fetch.");
+    this.logVerbose("provideLanguageModelChatInformation: cancelled before fetch.");
       return [];
     }
 
     const models = await this.fetchModels(apiKey);
-    this.log(
+    this.logVerbose(
       `provideLanguageModelChatInformation: advertising ${models.length} model(s) to VS Code [${models.slice(0, 3).join(", ")}${models.length > 3 ? ", …" : ""}]`,
     );
     const settings = getSettings();
@@ -1419,7 +1428,7 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
     const limits = modelLimits(model.id, settings);
     const localRequestId = crypto.randomUUID();
 
-    this.log(`Request: model=${model.id} messages=${apiMessages.length}${sentNativeImages ? " images=inline(image_url)" : ""}`);
+    this.logVerbose(`Request: model=${model.id} messages=${apiMessages.length}${sentNativeImages ? " images=inline(image_url)" : ""}`);
     if (settings.debugReasoning) {
       this.log("Reasoning debug is enabled. Provider reasoning_content will be written to this output channel when available.");
     }
@@ -1460,12 +1469,12 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
             cachedTokens: summary.cachedTokens,
             finishReason: summary.finishReason,
           });
-          if (usageLog) {
+          if (usageLog && getSettings().verboseLogs) {
             outputChannel.appendLine(`[usage] ${usageLog}`);
           }
         },
       );
-      this.log(`Request completed: model=${model.id}`);
+      this.logVerbose(`Request completed: model=${model.id}`);
     } catch (error) {
       let message = error instanceof Error ? error.message : String(error);
 
@@ -1509,12 +1518,12 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
                 cachedTokens: summary.cachedTokens,
                 finishReason: summary.finishReason,
               });
-              if (usageLog) {
+              if (usageLog && getSettings().verboseLogs) {
                 outputChannel.appendLine(`[usage] ${usageLog}`);
               }
             },
           );
-          this.log(`Request completed (images stripped retry): model=${model.id}`);
+          this.logVerbose(`Request completed (images stripped retry): model=${model.id}`);
           void vscode.window.showWarningMessage(
             `Z.AI: ${model.id} rejected inline images — the request was retried without them. Enable the vision bridge (Z.AI: Setup Vision Bridge) for image support on this model.`,
           );
@@ -1580,12 +1589,12 @@ class ZaiProvider implements vscode.LanguageModelChatProvider<ZaiModel> {
                   cachedTokens: summary.cachedTokens,
                   finishReason: summary.finishReason,
                 });
-                if (usageLog) {
+                if (usageLog && getSettings().verboseLogs) {
                   outputChannel.appendLine(`[usage] ${usageLog}`);
                 }
               },
             );
-            this.log(`Request completed (1261 reasoning-stripped retry): model=${model.id}`);
+            this.logVerbose(`Request completed (1261 reasoning-stripped retry): model=${model.id}`);
             void vscode.window.showWarningMessage(
               `Z.AI: ${model.id} hit the prompt-length limit (1261). The request was retried without historical reasoning. Start a new chat or clear history to stay under the ${limits.contextWindow} token window.`,
             );
@@ -1748,7 +1757,9 @@ async function streamChatCompletions(
     output.appendLine(`[${new Date().toISOString()}] Reasoning: ${reasoning.notice}`);
   }
 
-  output.appendLine(`[${new Date().toISOString()}] Token budget: model=${modelId} input≈${estimatedInputTokens} maxOut=${requestMaxTokens} (contextWindow=${limits.contextWindow}, budgetUsed=${estimatedInputTokens + requestMaxTokens})`);
+  if (settings.verboseLogs) {
+    output.appendLine(`[${new Date().toISOString()}] Token budget: model=${modelId} input≈${estimatedInputTokens} maxOut=${requestMaxTokens} (contextWindow=${limits.contextWindow}, budgetUsed=${estimatedInputTokens + requestMaxTokens})`);
+  }
 
   if (estimatedInputTokens >= limits.contextWindow) {
     output.appendLine(`[${new Date().toISOString()}] WARNING: Input tokens (${estimatedInputTokens}) >= context window (${limits.contextWindow}). Request may fail.`);
@@ -1794,10 +1805,6 @@ async function streamChatCompletions(
       ? {}
       : { finishReason: usageSummary.finishReason }),
   };
-
-  output.appendLine(
-    `[response-summary] model=${modelId} durationMs=${durationMs} promptTokens=${usageSummary.promptTokens ?? "n/a"} completionTokens=${usageSummary.completionTokens ?? "n/a"} totalTokens=${usageSummary.totalTokens ?? "n/a"} cachedTokens=${usageSummary.cachedTokens ?? "n/a"} finishReason=${usageSummary.finishReason ?? "<unknown>"}`,
-  );
 
   const usageLog = formatUsageLogLine({
     promptTokens: usageSummary.promptTokens,
@@ -2054,12 +2061,14 @@ async function doStreamFetch(
     Math.round(settings.requestTimeout * modelTimeoutMultiplier)
   );
 
-  output.appendLine(
-    `[${new Date().toISOString()}] Timeout config: model=${modelId || "?"} ` +
-    `flagship=${isFlagshipModel} multiplier=${modelTimeoutMultiplier}× ` +
-    `connectionTimeout=${effectiveConnectionTimeout}ms ` +
-    `(base=${settings.requestTimeout}ms, max=300000ms)`
-  );
+  if (settings.verboseLogs) {
+    output.appendLine(
+      `[${new Date().toISOString()}] Timeout config: model=${modelId || "?"} ` +
+      `flagship=${isFlagshipModel} multiplier=${modelTimeoutMultiplier}× ` +
+      `connectionTimeout=${effectiveConnectionTimeout}ms ` +
+      `(base=${settings.requestTimeout}ms, max=300000ms)`
+    );
+  }
 
   // Connection timeout: abort if the initial connection / headers take too long.
   // This is separate from the inactivity timeout below.
@@ -2850,6 +2859,7 @@ function getSettings(): ApiSettings {
     maxInputTokensOverride: config.get("maxInputTokens", 0),
     debugReasoning: config.get("debugReasoning", false),
     showThinking: config.get("showThinking", true),
+    verboseLogs: config.get("verboseLogs", false),
     requestTimeout: config.get("requestTimeout", 120000),
     maxRetries: config.get("maxRetries", 2),
     reasoningEffort: isReasoningEffort(reasoningEffortRaw) ? reasoningEffortRaw : "off"

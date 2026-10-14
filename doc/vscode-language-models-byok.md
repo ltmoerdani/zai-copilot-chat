@@ -235,7 +235,7 @@ the command line.
 
 - `Z.AI: Set API Key` → retitled **`Z.AI: Set / Update API Key`**; it prompts for a key, stores it in `SecretStorage`, creates the `zai` group, and refreshes models.
 - `Manage Provider` menu: **Set / Update API Key (stored by this extension)**, **Open Language Models (BYOK)…**, **Clear Legacy API Key (SecretStorage)**, Test Connection, Refresh Models, Show Quota.
-- `package.json`: the `zai` vendor declares **`"managementCommand": "zai.manage"`**, giving VS Code a working fallback action for the vendor.
+- `package.json`: the `zai` vendor declared **`"managementCommand": "zai.manage"`** at the time of this fix. *(Superseded, 2026-10-14: the property is deprecated by VS Code and has been removed — with the `configuration` schema declared, VS Code provides the built-in manage UI, and `Z.AI: Manage Provider` remains a Command Palette command.)*
 - `Test Connection`, `Show Quota`, the activation toast, `@z-research` pre-flight, and the output-channel log now all point at a working key-entry path when no key is configured.
 
 ---
@@ -274,5 +274,5 @@ Manual verification in the Extension Development Host: add Z.AI via `"+ Add Mode
 - **Never make `SecretStorage` the only home for a provider API key.** A key VS Code does not know about produces a group VS Code cannot manage. Keep `SecretStorage` as a mirror, and treat the BYOK configuration entry as the source of truth.
 - **Always implement both provider call shapes**: the groupless call *and* the per-group call with `options.configuration`. Returning the full model list on both duplicates every model.
 - **Never derive `family` from the model id.** A per-model unique family string breaks VS Code's family-based grouping and selection; use a stable, real family name.
-- **Always declare a `managementCommand`** for a `languageModelChatProviders` vendor. It is the only guaranteed-working action when VS Code's built-in group handlers silently no-op.
+- **Always declare a `managementCommand`** for a `languageModelChatProviders` vendor. It is the only guaranteed-working action when VS Code's built-in group handlers silently no-op. *(Historical guidance — superseded 2026-10-14 when VS Code deprecated the property; declare `configuration` instead, which makes VS Code render its built-in manage UI. See CHANGELOG "Unreleased → Changed".)*
 - When a VS Code UI affordance "does nothing", verify the workbench precondition from the shipped `workbench.desktop.main.js` before changing extension code — the empty menu here came from `if (!configuration) return []`, not from the extension's own commands.

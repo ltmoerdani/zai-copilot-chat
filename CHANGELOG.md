@@ -2,6 +2,18 @@
 
 All notable changes to the **Z.AI Copilot Chat** extension are documented here.
 
+## 0.7.0 — 2026-10-14
+
+### Added
+
+- **Per-model "Thinking Effort" picker in the VS Code model picker** — every advertised Z.AI model now carries a `configurationSchema` declaring a `reasoningEffort` option, so the model picker details popup renders **Thinking Effort** chips (`off` / `low` / `high` / `max`; `medium` included for glm ≤ 5.2) — the same native VS Code UX the OpenCode extension uses. VS Code persists the pick per model and replays it on every request via `options.modelConfiguration`; the request handler validates it with `isReasoningEffort` and it **overrides the global `zai.reasoningEffort` setting**, with the override logged to the output channel. Implemented without any proposed API: `src/vscode.proposed.chatProvider.d.ts` is a local type shim for the stable-but-undeclared fields (`configurationSchema`, `modelConfiguration`), following OpenCode's approach. The schema is generation-aware (`src/reasoning.ts::effortSchemaProperty`, pure + unit-tested): glm-5.3 offers the forced-thinking set (its `off` still translates to `low` — lightweight reasoning), other GLM models the full level set, non-GLM models get no options. The legacy `configuration` shape is accepted only when it carries a `reasoningEffort` key, so an auth configuration object is never mistaken for model settings. Verified: `tsc` clean, 177/177 tests. Full research + implementation record: [`doc/model-picker-thinking-effort.md`](./doc/model-picker-thinking-effort.md).
+
+- **`zai.verboseLogs` setting (default `false`)** — output-channel log cleanup. Essential lines always show (errors, retries, timeouts, quota, reasoning notices, one `[usage]` line per request); verbose diagnostics now require the flag: model-advertisement calls (the biggest source of log spam — VS Code calls `provideLanguageModelChatInformation` dozens of times per session), `Request:` / `Request completed:` lines, token-budget and timeout-configuration dumps, test-connection traces. Duplicate `[usage]` lines and the redundant `[response-summary]` line were removed.
+
+### Changed
+
+- **Dropped the deprecated `managementCommand` from the `zai` provider contribution** — VS Code deprecation warning removed. With the `configuration` schema declared, VS Code provides the built-in manage UI; the `Z.AI: Manage Provider` command itself remains available from the Command Palette.
+
 ## 0.6.3 — 2026-09-14
 
 ### Fixed

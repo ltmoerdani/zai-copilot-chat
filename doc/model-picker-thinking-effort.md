@@ -130,6 +130,8 @@ One design decision diverges from OpenCode: they hide `off` entirely for GLM 5.3
 
 ## 7. Risks & Caveats
 
+> **Follow-up (same release):** a `zai.verboseLogs` setting (default `false`) was added to keep the output channel clean — the per-request `Reasoning:` override line and one `[usage]` line always show; model-advertisement, token-budget, timeout-config and request-lifecycle lines are gated behind the flag (duplicate `[usage]` lines and the redundant `[response-summary]` line were removed outright). The deprecated `managementCommand` provider property was also dropped (built-in manage UI now suffices; `Z.AI: Manage Provider` remains a Command Palette command).
+
 - **VS Code version gate:** if `engines.vscode` stays `^1.118.0` while the fields only render on newer builds, the schema is ignored silently on old hosts — acceptable (graceful degradation), but the README should state "Thinking Effort chips require VS Code ≥ 1.12x".
 - **Type drift:** the OpenCode shim accepts both `modelConfiguration` and `configuration` on request options — replicate the `??` fallback so the picker keeps working across VS Code versions.
 - **Never send an invalid value:** validate the read-back with `isReasoningEffort` before use; on an unrecognized value fall back to the global setting (defensive, mirrors OpenCode's `normalize()`).

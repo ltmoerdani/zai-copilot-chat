@@ -2,7 +2,7 @@
   "name": "zai-copilot-chat",
 "displayName": "Z.AI Copilot Chat: BYOK 15+ GLM Models",
   "description": "Use 15+ Z.AI GLM models (GLM-5.3 flagship 1M context, GLM-5.3-Flash multimodal, GLM-5.2, GLM-4.7, free Flash + Vision models) in GitHub Copilot Chat. BYOK, no Copilot Pro needed. Includes @z-research deep-research agent.",
-  "version": "0.6.3",
+  "version": "0.7.0",
   "publisher": "ltmoerdani",
   "license": "MIT",
   "icon": "media/zai.png",
@@ -141,6 +141,11 @@
           "type": "boolean",
           "default": true,
           "description": "Stream model reasoning (thinking) into the chat response wrapped in <think>…</think> so it is visible while the model works. Disable to show only the final answer."
+        },
+        "zai.verboseLogs": {
+          "type": "boolean",
+          "default": false,
+          "description": "Emit verbose diagnostics to the Z.AI output channel (model advertisement calls, token budget, timeout configuration, per-request lifecycle). Keep off for a clean log: only errors, retries, quota and one [usage] line per request are shown."
         },
         "zai.requestTimeout": {
           "type": "number",
@@ -329,7 +334,6 @@
       {
         "vendor": "zai",
         "displayName": "Z.AI",
-        "managementCommand": "zai.manage",
         "configuration": {
           "type": "object",
           "required": [

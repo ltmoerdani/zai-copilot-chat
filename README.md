@@ -40,7 +40,7 @@ You already love Copilot Chat. Now imagine it powered by Z.AI's GLM models — a
 | 🌍 **Models** | 15+ GLM models: GLM-5.3, GLM-5.2, GLM-5.1, GLM-5, GLM-4.7, GLM-4.6, GLM-4.5, Air, AirX |
 | 🤖 **Agent Mode** | `@z-research` deep-research agent with dozens of cited sources |
 | 🧠 **1M context** | GLM-5.3 / GLM-5.2 hold ~1 million tokens — paste an entire repo or a book chapter |
-| 💭 **Reasoning control** | Pick thinking depth per task via `zai.reasoningEffort` — `off` / `low` / `medium` / `high` / `max`, translated per GLM generation |
+| 💭 **Reasoning control** | Pick thinking depth per task via the **Thinking Effort** chips in the model picker (per model) or `zai.reasoningEffort` (global) — `off` / `low` / `medium` / `high` / `max`, translated per GLM generation |
 | 👁️ **Vision** | GLM-5.3-Flash, GLM-5V-Turbo, GLM-4.6V, GLM-4.6V-Flash read screenshots and diagrams |
 | 🆓 **Free models** | `glm-4.5-flash` (text) and `glm-4.6v-flash` (vision) are $0 on Z.AI |
 | 🔒 **Key storage** | Your API key is stored by VS Code (SecretStorage + `chatLanguageModels.json`), never sent anywhere but Z.AI |
@@ -281,7 +281,7 @@ For advanced usage, you can also run these commands via the Command Palette (`Cm
 | `Z.AI: Toggle Vision Bridge` | One-command on/off switch for image reading — off takes effect on the next request, no reload needed |
 | `Z.AI: Vision Bridge Status` | Engine readiness + evidence cache stats (memory + persistent tier) |
 
-> **Note:** Z.AI is registered both declaratively (in `package.json`, so VS Code knows the `zai` vendor id and the API-key form fields) and programmatically (so the extension can supply the live model list). The `zai` vendor also declares `managementCommand: zai.manage`, which gives VS Code a working fallback action for the vendor. You do **not** need to visit the `Language Models` view manually — `Z.AI: Set / Update API Key` creates the group for you.
+> **Note:** Z.AI is registered both declaratively (in `package.json`, so VS Code knows the `zai` vendor id and the API-key form fields) and programmatically (so the extension can supply the live model list). With the `configuration` schema declared, VS Code provides the built-in manage UI for the vendor; the `Z.AI: Manage Provider` command remains available from the Command Palette. You do **not** need to visit the `Language Models` view manually — `Z.AI: Set / Update API Key` creates the group for you.
 
 ---
 
@@ -309,7 +309,8 @@ The quota is fetched from `https://api.z.ai/api/monitor/usage/quota/limit` and a
 | `zai.maxInputTokens` | `number` | `0` | Context window override. `0` uses the per-model bundled context size. 128K-tier models advertise 75% of the window (96K) so VS Code compacts before the server-side prompt limit (Z.AI error 1261) is hit. |
 | `zai.debugReasoning` | `boolean` | `false` | Write provider `reasoning_content` to **Output → Z.AI** for debugging |
 | `zai.requestTimeout` | `number` | `180000` | Connection timeout in ms. Auto-scaled **1.5×** for 200K flagship models (glm-5.3/5.2/5.1/5/4.7) and capped at 300000ms. Inactivity timer scales the same way (90–180s window). |
-| `zai.reasoningEffort` | `string` | `off` | Thinking depth for GLM models, translated per generation: **`off`** disables thinking (glm-5.3 maps to `low` — it cannot disable thinking), **`low`** lightweight, **`medium`** balanced (5.3 runs `high`), **`high`** enhanced — good default for coding, **`max`** deepest (slowest, most tokens). Reasoning is billed as output, so lowering this is the biggest quota saver. See [`doc/reasoning-effort-picker.md`](./doc/reasoning-effort-picker.md). |
+| `zai.reasoningEffort` | `string` | `off` | **Global** thinking depth for GLM models, translated per generation: **`off`** disables thinking (glm-5.3 maps to `low` — it cannot disable thinking), **`low`** lightweight, **`medium`** balanced (5.3 runs `high`), **`high`** enhanced — good default for coding, **`max`** deepest (slowest, most tokens). Reasoning is billed as output, so lowering this is the biggest quota saver. A per-model **Thinking Effort** pick in the model picker overrides this global setting per request. See [`doc/model-picker-thinking-effort.md`](./doc/model-picker-thinking-effort.md). |
+| `zai.verboseLogs` | `boolean` | `false` | Emit verbose diagnostics to **Output → Z.AI** (model advertisement calls, token budget, timeout configuration, per-request lifecycle). Keep off for a clean log: only errors, retries, quota and one `[usage]` line per request are shown. |
 | `zai.maxRetries` | `number` | `2` | Automatic retries on transient errors (fetch failed, timeout, 5xx) with exponential backoff (1s → max 10s + jitter). **429 rate limits** get a dedicated cadence: 3s → 6s → 12s → 15s (cap) + jitter and 2 extra attempts (up to 5 total). **1305 overload** gets an even longer cadence: 4s → 20s (cap) + 3 extra attempts (up to 6 total, ~90s), since Z.AI overloads can persist >1 minute. |
 | `zai.defaultModel` | `string` | `""` | Model id to mark as the default selection in the Copilot Chat model picker (for example `glm-5.3`). Leave empty to mark no model as default; users can still pick any model manually. |
 | `zai.showUsageStatusBar` | `boolean` | `true` | Show the latest Z.AI usage summary (prompt→output tokens) in the VS Code status bar after each response. |
