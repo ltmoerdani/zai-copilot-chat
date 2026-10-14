@@ -135,7 +135,12 @@
         "zai.debugReasoning": {
           "type": "boolean",
           "default": false,
-          "description": "Write provider reasoning_content to the Z.AI output channel for debugging. Reasoning is not shown in Copilot Chat."
+          "description": "Write provider reasoning_content to the Z.AI output channel for debugging."
+        },
+        "zai.showThinking": {
+          "type": "boolean",
+          "default": true,
+          "description": "Stream model reasoning (thinking) into the chat response wrapped in <think>…</think> so it is visible while the model works. Disable to show only the final answer."
         },
         "zai.requestTimeout": {
           "type": "number",
